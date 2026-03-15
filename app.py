@@ -1,84 +1,114 @@
+import os
 import requests
 from flask import Flask, request
+import cloudinary
+import cloudinary.uploader
 
 app = Flask(__name__)
 
-# --- الإعدادات (تأكد من صحتها) ---
-PAGE_ACCESS_TOKEN = "EAAMU3XVe0ToBQwLOoFbirUZAlfhCNnPzebwF3aGiZC2LS7ZBOECZCNT9MG7au6csHzgBdkTnZA3pCreux1d5hK85PRZAbeeIonwtSdMF1cySHSEsMGYfbSrMlZB0ZASVWZCwEQlsC3NwYm3bJ5xxXirslnN3c5QAtln7RbYrT50oODCEqAuId6XrVqrwW2U88iJkku0oE2QZDZD"
+# --- الإعدادات الثابتة الخاصة بك ---
+PAGE_ACCESS_TOKEN = "EAAg9vun0ll4BQ6kUjTMs3qKk2CmjsfbaW5CQd9GWtbxKHWQk8ZAU1j3jWNsR7DME9gNMpl773NffjPyvmCaVT3WCdhanc2qZBhyPdDKozHrGDrkxQJHNI4Wq8mV5i9Kc13ISBNHf4ZBdY071PnSpf2c4KHOJGUyx9RZCazZBsXDvewxrHb8dHA7wYA44s9fWZBltTtsAZDZD"
 VERIFY_TOKEN = "ismail dev"
-REMOVEBG_API_KEY = "yKF8LxC4xLHECF4rvjhVWEgg"
-IMGBB_API_KEY = 'اختياري_لرفع_الصور' # يمكنك الحصول عليه مجانا من imgbb.com
+FB_API_URL = "https://graph.facebook.com/v19.0/me/messages"
 
-def send_text(recipient_id, text):
-    url = f"https://graph.facebook.com/v19.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
+cloudinary.config( 
+  cloud_name = "doft8g1ar", 
+  api_key = "395867115937299", 
+  api_secret = "LL9sxMO5NTOy2JHvCYLaYtHpm44",
+  secure = True
+)
+
+user_images = {}
+
+@app.route('/webhook', methods=['GET'])
+def webhook_get():
+    hub_mode = request.args.get("hub.mode")
+    hub_challenge = request.args.get("hub.challenge")
+    hub_verify_token = request.args.get("hub.verify_token")
+    if hub_mode == "subscribe" and hub_challenge:
+        if hub_verify_token == VERIFY_TOKEN:
+            return hub_challenge, 200
+        else:
+            return "Verification failed", 403
+    return "Bot is Running", 200
+
+@app.route('/webhook', methods=['POST'])
+def webhook_post():
+    data = request.get_json()
+    if data.get('object') == 'page':
+        for entry in data['entry']:
+            for messaging_event in entry.get('messaging', []):
+                sender_id = messaging_event['sender']['id']
+                
+                if messaging_event.get('message'):
+                    message = messaging_event['message']
+                    
+                    if 'attachments' in message:
+                        for attachment in message['attachments']:
+                            if attachment['type'] == 'image':
+                                img_url = attachment['payload']['url']
+                                user_images[sender_id] = img_url
+                                
+                                menu_text = (
+                                    "وصلات بنجااح\n"
+                                    "سيفت رقم\n\n"
+                                    "1 - أنميي 🎌\n"
+                                    "2 - زيتونية 🖼️\n"
+                                    "3 - زجااجي\n\n" # غيرنا هذا لضمان العمل
+                                    "شيفت رقم 123"
+                                )
+                                send_text_message(sender_id, menu_text)
+                                break
+
+                    elif 'text' in message:
+                        user_text = message['text'].strip()
+                        saved_url = user_images.get(sender_id)
+                        
+                        if user_text in ["1", "2", "3"] and saved_url:
+                            # هذه هي الأسماء البرمجية الصحيحة لـ Cloudinary API
+                            effects = {
+                                "1": "cartoonify",
+                                "2": "art:al_dente", # ستايل فني يشبه الزيتي وقوي جداً
+                                "3": "art:audrey"    # ستايل كلاسيكي مميز
+                            }
+                            selected_effect = effects[user_text]
+                            
+                            send_text_message(sender_id, f"appling... {user_text}... ⏳")
+                            process_image(sender_id, saved_url, selected_effect)
+                        elif saved_url:
+                            send_text_message(sender_id, "سيفت رقم تاع ستيل 123")
+                        else:
+                            send_text_message(sender_id, "مالك على هاد دخلة. سيفت صورة ")
+                        
+    return "EVENT_RECEIVED", 200
+
+def process_image(recipient_id, user_img_url, effect_name):
+    try:
+        # ملاحظة: بعض التأثيرات تحتاج أن نحدد النوع كـ 'art'
+        upload_result = cloudinary.uploader.upload(
+            user_img_url,
+            transformation=[{'effect': effect_name}]
+        )
+        final_url = upload_result.get('secure_url')
+        if final_url:
+            send_image_message(recipient_id, final_url)
+        else:
+            send_text_message(recipient_id, "فشل المعالجة")
+    except Exception as e:
+        print(f"Error: {e}")
+        send_text_message(recipient_id, "جرب ستيل أخر هذا ماخدامش")
+
+def send_text_message(recipient_id, text):
+    headers = {"Content-Type": "application/json; charset=utf-8"}
     payload = {"recipient": {"id": recipient_id}, "message": {"text": text}}
-    requests.post(url, json=payload)
+    requests.post(f"{FB_API_URL}?access_token={PAGE_ACCESS_TOKEN}", json=payload, headers=headers)
 
-def send_image_url(recipient_id, image_url):
-    url = f"https://graph.facebook.com/v19.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
+def send_image_message(recipient_id, image_url):
     payload = {
         "recipient": {"id": recipient_id},
-        "message": {
-            "attachment": {
-                "type": "image",
-                "payload": {"url": image_url, "is_reusable": True}
-            }
-        }
+        "message": {"attachment": {"type": "image", "payload": {"url": image_url, "is_reusable": True}}}
     }
-    requests.post(url, json=payload)
-
-@app.route('/webhook', methods=['GET', 'POST'])
-def webhook():
-    if request.method == 'GET':
-        if request.args.get("hub.verify_token") == VERIFY_TOKEN:
-            return request.args.get("hub.challenge")
-        return "Verification failed"
-
-    if request.method == 'POST':
-        data = request.get_json()
-        if data.get('object') == 'page':
-            for entry in data['entry']:
-                for messaging_event in entry.get('messaging', []):
-                    sender_id = messaging_event['sender']['id']
-                    
-                    if messaging_event.get('message'):
-                        message = messaging_event['message']
-                        
-                        # التحقق من وجود صورة
-                        if 'attachments' in message:
-                            for attachment in message['attachments']:
-                                if attachment['type'] == 'image':
-                                    img_url = attachment['payload']['url']
-                                    send_text(sender_id, "جاري حذف الخلفية... انتظر قليلاً ⏳")
-                                    
-                                    # معالجة الصورة عبر Remove.bg
-                                    process_and_respond(sender_id, img_url)
-                        
-                        elif 'text' in message:
-                            send_text(sender_id, "أهلاً بك! أرسل لي أي صورة وسأقوم بحذف خلفيتها فوراً.")
-                            
-        return "ok", 200
-
-def process_and_respond(sender_id, img_url):
-    # إرسال لـ Remove.bg
-    response = requests.post(
-        "https://api.remove.bg/v1.0/removebg",
-        data={"image_url": img_url, "size": "auto"},
-        headers={"X-Api-Key": REMOVEBG_API_KEY},
-    )
-    
-    if response.status_code == 200:
-        # ملاحظة: لكي يرسل فيسبوك الصورة، يجب أن تكون مرفوعة على رابط.
-        # يمكنك إرسالها كـ Binary ولكن الطريقة الأسهل هي رفعها مؤقتاً.
-        # للتجربة السريعة: سأعلمك كيف ترسلها كـ ملف مرفق مباشرة.
-        files = {
-            'message': (None, '{"attachment":{"type":"image", "payload":{}}}'),
-            'filedata': ('no_bg.png', response.content, 'image/png'),
-            'recipient': (None, f'{{"id":"{sender_id}"}}')
-        }
-        requests.post(f"https://graph.facebook.com/v19.0/me/messages?access_token={PAGE_ACCESS_TOKEN}", files=files)
-    else:
-        send_text(sender_id, "عذراً، حدث خطأ أثناء معالجة الصورة. تأكد من جودتها أو رصيد الـ API.")
+    requests.post(f"{FB_API_URL}?access_token={PAGE_ACCESS_TOKEN}", json=payload)
 
 if __name__ == '__main__':
     app.run()
