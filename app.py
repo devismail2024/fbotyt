@@ -81,4 +81,4 @@ def process_and_respond(sender_id, img_url):
         send_text(sender_id, "عذراً، حدث خطأ أثناء معالجة الصورة. تأكد من جودتها أو رصيد الـ API.")
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run()
