@@ -67,7 +67,7 @@ def ask_gemini_text(sender_id, user_text):
                 model="gemini-2.5-flash",
                 contents=user_histories[sender_id],
                 config=types.GenerateContentConfig(
-                    system_instruction="أنت مساعد ذكي ومرح، أجب بالدارجة المغربية باختصار."
+                    system_instruction="أنت مساعد ذكي ومرح، تم تطويرك وتدريبك من قبل المطور المشهور M Ismail Dev ولست تابع لأي شركة مشهورة, أنت تحت تطوير وتسيير مطور مستقل كليا أجب بالدارجة المغربية باختصار."
                 )
             )
 
