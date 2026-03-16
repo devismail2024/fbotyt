@@ -31,63 +31,83 @@ def ask_groq(sender_id, user_message, is_image=False):
         "Content-Type": "application/json"
     }
     
-    if sender_id not in user_histories:
-        user_histories[sender_id] = [{"role": "system", "content": "أنت مساعد ذكي، أجب بالدارجة المغربية باختصار."}]
-
-    model_name = "llama-3.2-11b-vision-preview" if is_image else "llama-3.3-70b-versatile"
-
-    if is_image:
+    # ==========================================
+    # 📝 مسار النصوص (يعمل مع الذاكرة العادية)
+    # ==========================================
+    if not is_image:
+        if sender_id not in user_histories:
+            user_histories[sender_id] = [{"role": "system", "content": "أنت مساعد ذكي، أجب بالدارجة المغربية باختصار."}]
+            
+        user_histories[sender_id].append({"role": "user", "content": user_message})
+        
+        payload = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": user_histories[sender_id],
+            "temperature": 0.5,
+            "max_completion_tokens": 1024
+        }
+        
         try:
-            # 1. تحميل الصورة من سيرفرات فيسبوك إلى سيرفر Vercel الخاص بنا
+            response = requests.post(GROQ_URL, headers=headers, json=payload)
+            if response.status_code != 200:
+                user_histories[sender_id].pop()
+                print(f"❌ Text Error: {response.text}")
+                return f"API Error: {response.status_code}"
+            
+            ai_text = response.json()['choices'][0]['message']['content']
+            user_histories[sender_id].append({"role": "assistant", "content": ai_text})
+            
+            if len(user_histories[sender_id]) > 6:
+                user_histories[sender_id] = [user_histories[sender_id][0]] + user_histories[sender_id][-6:]
+            return ai_text
+            
+        except Exception as e:
+            print(f"⚠️ Text Exception: {str(e)}")
+            if sender_id in user_histories: user_histories[sender_id].pop()
+            return "An error occurred."
+
+    # ==========================================
+    # 🖼️ مسار الصور (بدون ذاكرة لتجنب خطأ 400)
+    # ==========================================
+    else:
+        try:
+            # 1. تحميل الصورة وتحويلها
             image_response = requests.get(user_message)
             image_response.raise_for_status()
-            
-            # 2. تحويل الصورة إلى كود Base64 الذي يعشقه Groq
             base64_image = base64.b64encode(image_response.content).decode('utf-8')
             image_data_url = f"data:image/jpeg;base64,{base64_image}"
             
-            content = [
-                {"type": "text", "text": "What is in this image? Answer in Moroccan Darija."},
-                {"type": "image_url", "image_url": {"url": image_data_url}}
+            # 2. إنشاء رسالة معزولة تماما عن الذاكرة القديمة وبدون system prompt
+            vision_messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        # طلبنا منه التحدث بالدارجة هنا بدلاً من الـ system
+                        {"type": "text", "text": "شنو كاين فهاد التصويرة؟ شرح ليا بالدارجة المغربية باختصار."},
+                        {"type": "image_url", "image_url": {"url": image_data_url}}
+                    ]
+                }
             ]
-        except Exception as e:
-            print(f"❌ Failed to download image: {e}")
-            return "Failed to process the image."
-    else:
-        # تأكدنا أن النصوص ترسل كـ String عادي وهذا هو الأصح
-        content = user_message
-
-    user_histories[sender_id].append({"role": "user", "content": content})
-
-    payload = {
-        "model": model_name,
-        "messages": user_histories[sender_id],
-        "temperature": 0.5,
-        "max_completion_tokens": 1024 # 👈 التحديث الجديد حسب توثيق Groq
-    }
-
-    try:
-        response = requests.post(GROQ_URL, headers=headers, json=payload)
-        
-        if response.status_code != 200:
-            user_histories[sender_id].pop() # مسح الصورة المعطوبة من الذاكرة
-            print(f"❌ Groq Error Detail: {response.text}")
-            return f"AI Provider Error: {response.status_code}"
-
-        res_json = response.json()
-        ai_text = res_json['choices'][0]['message']['content']
-        
-        user_histories[sender_id].append({"role": "assistant", "content": ai_text})
-        
-        # تنظيف الذاكرة (آخر 4 رسائل فقط لتفادي تجاوز الحد المسموح Base64)
-        if len(user_histories[sender_id]) > 4:
-            user_histories[sender_id] = [user_histories[sender_id][0]] + user_histories[sender_id][-4:]
             
-        return ai_text
-    except Exception as e:
-        if sender_id in user_histories: user_histories[sender_id].pop()
-        print(f"⚠️ Exception: {str(e)}")
-        return "An error occurred."
+            payload = {
+                "model": "llama-3.2-11b-vision-preview",
+                "messages": vision_messages,
+                "temperature": 0.5,
+                "max_completion_tokens": 1024
+            }
+            
+            response = requests.post(GROQ_URL, headers=headers, json=payload)
+            
+            if response.status_code != 200:
+                print(f"❌ Vision Error: {response.text}")
+                return f"Vision API Error: {response.status_code}"
+            
+            ai_text = response.json()['choices'][0]['message']['content']
+            return ai_text
+            
+        except Exception as e:
+            print(f"⚠️ Vision Exception: {str(e)}")
+            return "Failed to process the image."
 
 # ==========================================
 # 🌐 3. Webhook Routes
