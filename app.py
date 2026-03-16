@@ -33,7 +33,6 @@ def ask_groq(sender_id, user_message, is_image=False):
     if sender_id not in user_histories:
         user_histories[sender_id] = [{"role": "system", "content": "أنت مساعد ذكي، أجب بالدارجة المغربية باختصار."}]
 
-    # Model selection: 70b for text, 11b-vision for images
     model_name = "llama-3.2-11b-vision-preview" if is_image else "llama-3.3-70b-versatile"
 
     if is_image:
@@ -54,23 +53,22 @@ def ask_groq(sender_id, user_message, is_image=False):
 
     try:
         response = requests.post(GROQ_URL, headers=headers, json=payload)
-        res_json = response.json()
         
+        # 💡 التعديل هنا: إذا لم يكن الرد 200 (ناجح)
         if response.status_code != 200:
-            print(f"❌ Groq API Error: {res_json}")
-            return "An error occurred with AI provider."
+            # سيرسل لك رقم الخطأ (مثلاً 401 للمفتاح الخطأ، أو 404 للموديل الخطأ)
+            return f"AI Provider Error: {response.status_code}"
 
+        res_json = response.json()
         ai_text = res_json['choices'][0]['message']['content']
         user_histories[sender_id].append({"role": "assistant", "content": ai_text})
         
-        # Keep history clean
         if len(user_histories[sender_id]) > 6:
             user_histories[sender_id] = [user_histories[sender_id][0]] + user_histories[sender_id][-6:]
             
         return ai_text
     except Exception as e:
-        print(f"⚠️ System Error: {str(e)}")
-        return "Try again..."
+        return f"System Error: {str(e)[:50]}"
 
 # ==========================================
 # 🌐 3. Webhook Routes
