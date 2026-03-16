@@ -27,45 +27,61 @@ MAX_HISTORY = 10
 # ==========================================
 
 def ask_groq(sender_id, content_payload):
-    """إرسال الطلب لـ Groq باستخدام Requests فقط"""
+    """إرسال الطلب لـ Groq مع دعم النصوص والصور والذاكرة"""
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
     
-    # تهيئة الذاكرة
+    # 1. تهيئة الذاكرة إذا كانت فارغة
     if sender_id not in user_histories:
         user_histories[sender_id] = [
             {"role": "system", "content": "أنت مساعد ذكي ومرح، تم تطيرك بواسطة مطور مستقل مشهور إسمه إسماعيل المعروف على مواقع التواصل بM Ismail dev ولست تابعا لأي شركة مشهورة, أنت تحت تطير وإدارة وتدريب كامل من طرف إسماعيل كليا"}
         ]
     
-    # إضافة الرسالة الجديدة للذاكرة
-    user_histories[sender_id].append({"role": "user", "content": content_payload})
+    # 2. تحويل الـ content_payload إلى هيكل متوافق مع Groq
+    # إذا كان النص بسيطاً، نحوله لقائمة تحتوي على text
+    if isinstance(content_payload, str):
+        actual_content = [{"type": "text", "text": content_payload}]
+    else:
+        actual_content = content_payload
+
+    # 3. إضافة رسالة المستخدم للذاكرة
+    user_histories[sender_id].append({"role": "user", "content": actual_content})
 
     payload = {
-        "model": "llama-3.2-11b-vision-preview", # موديل الرؤية القوي
+        "model": "llama-3.2-11b-vision-preview",
         "messages": user_histories[sender_id],
-        "max_tokens": 500
+        "temperature": 0.7,
+        "max_tokens": 1024
     }
 
     try:
         response = requests.post(GROQ_URL, json=payload, headers=headers)
-        response.raise_for_status()
-        res_data = response.json()
         
+        # إذا كان هناك خطأ في الـ API (مثل مفتاح خاطئ أو Rate Limit)
+        if response.status_code != 200:
+            error_info = response.json()
+            print(f"❌ Groq API Error: {error_info}") # سيظهر لك في Vercel Logs
+            return f"Error من Groq: {error_info.get('error', {}).get('message', 'Unknown error')}"
+
+        res_data = response.json()
         ai_text = res_data['choices'][0]['message']['content']
         
-        # حفظ الرد في الذاكرة
+        # حفظ رد البوت في الذاكرة
         user_histories[sender_id].append({"role": "assistant", "content": ai_text})
         
-        # تنظيف الذاكرة
-        if len(user_histories[sender_id]) > MAX_HISTORY:
-            user_histories[sender_id] = [user_histories[sender_id][0]] + user_histories[sender_id][-MAX_HISTORY:]
+        # تنظيف الذاكرة (آخر 10 رسائل)
+        if len(user_histories[sender_id]) > 10:
+            user_histories[sender_id] = [user_histories[sender_id][0]] + user_histories[sender_id][-10:]
             
         return ai_text
+
     except Exception as e:
-        print(f"Groq Error: {e}")
-        return "internal serverr eroooooor"
+        print(f"⚠️ System Error in ask_groq: {str(e)}")
+        # إذا فشل الطلب، نحذف آخر رسالة مستخدم من الذاكرة لكي لا يتخبط البوت
+        user_histories[sender_id].pop()
+        return "try again"
 
 # ==========================================
 # 🌐 3. مسارات الويب والتواصل مع فيسبوك
