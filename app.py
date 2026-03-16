@@ -16,7 +16,7 @@ API_KEYS = [key.strip() for key in keys_from_vercel.split(",") if key.strip()]
 
 # إذا نسينا وضع المفاتيح في Vercel، الكود لن ينهار بل سيعطينا تحذيراً
 if not API_KEYS:
-    print("⚠️ تحذير: لم يتم العثور على مفاتيح Gemini في إعدادات Vercel!")
+    print("api keys not founnd on vercel")
     
 current_key_index = 0  
 
@@ -96,7 +96,7 @@ def ask_gemini_text(sender_id, user_text):
                     user_histories[sender_id].pop()
                 
                 # الخدعة: إرسال الخطأ الحقيقي مباشرة لك في ماسنجر!
-                return f"شوف أ عشيري، هذا هو الخطأ لي واقع في Vercel:\n\n{error_msg}"
+                return f"404 error in :\n\n{error_msg}"
 def analyze_image_with_gemini(sender_id, image_url):
     max_attempts = len(API_KEYS)
     
