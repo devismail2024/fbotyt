@@ -11,17 +11,13 @@ PAGE_ACCESS_TOKEN = "EAAg9vun0ll4BQ6kUjTMs3qKk2CmjsfbaW5CQd9GWtbxKHWQk8ZAU1j3jWN
 VERIFY_TOKEN = "ismail dev"
 FB_API_URL = "https://graph.facebook.com/v19.0/me/messages"
 
-API_KEYS = [
-    "AIzaSyB2eT9gtjAXt27bPy5LQypYMWH6BlEbO90",
-    "AIzaSyDX7ohw3OTm8A3i8D1TdrQc2iutVfweDgI",
-    "AIzaSyAmhQc8fGZ3_fFrSRFTpmDu4XrSMsIEqX0",
-    "AIzaSyCOZF2ueoSZSHRrg9YLAdOpjdsVrULbGrE",
-    "AIzaSyCGLFl3vNv-lTCVFxCmwZV5s0PCagRSirI",
-    "AIzaSyCWJaVqZ8bov4qan5-9OtwXagksHFJYw5s",
-    "AIzaSyCufhRXFIzrFfo-dUChFdWKjxSz9Z96FuU",
-    "AIzaSyBoar-e63KOP25rlZH_fc_h0g_i1UZJjTM",
-    "AIzaSyA8lzXtL94dLoObkNgSrxLveec9RBCw-eE",
-]
+keys_from_vercel = os.environ.get("GEMINI_KEYS", "")
+API_KEYS = [key.strip() for key in keys_from_vercel.split(",") if key.strip()]
+
+# إذا نسينا وضع المفاتيح في Vercel، الكود لن ينهار بل سيعطينا تحذيراً
+if not API_KEYS:
+    print("⚠️ تحذير: لم يتم العثور على مفاتيح Gemini في إعدادات Vercel!")
+    
 current_key_index = 0  
 
 user_cooldowns = {}  
