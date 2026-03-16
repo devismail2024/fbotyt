@@ -18,7 +18,7 @@ GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 user_histories = {}
 user_cooldowns = {}
-COOLDOWN_SECONDS = 30
+COOLDOWN_SECONDS = 1
 
 # ==========================================
 # 🧠 2. AI Engine (Groq)
