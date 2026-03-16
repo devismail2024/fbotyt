@@ -1,6 +1,6 @@
 import os
-import base64
 import time
+import base64
 import requests
 from flask import Flask, request
 
@@ -13,46 +13,44 @@ PAGE_ACCESS_TOKEN = "EAAg9vun0ll4BQ6kUjTMs3qKk2CmjsfbaW5CQd9GWtbxKHWQk8ZAU1j3jWN
 VERIFY_TOKEN = "ismail dev"
 FB_API_URL = "https://graph.facebook.com/v19.0/me/messages"
 
-# Groq API Setup
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+# OpenRouter API Setup (أضف هذا في Vercel بدلا من Groq)
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
+API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 user_histories = {}
 user_cooldowns = {}
-COOLDOWN_SECONDS = 1
+COOLDOWN_SECONDS = 30
 
 # ==========================================
-# 🧠 2. AI Engine (Groq)
+# 🧠 2. AI Engine (OpenRouter)
 # ==========================================
 
-def ask_groq(sender_id, user_message, is_image=False):
+def ask_ai(sender_id, user_message, is_image=False):
     headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://your-vercel-app-url.vercel.app", # يفضل وضعه
+        "X-Title": "Messenger Bot"
     }
     
-    # ==========================================
-    # 📝 مسار النصوص (يعمل مع الذاكرة العادية)
-    # ==========================================
+    # Text routing
     if not is_image:
         if sender_id not in user_histories:
-            user_histories[sender_id] = [{"role": "system", "content": "أنت مساعد ذكي، أجب بالدارجة المغربية باختصار."}]
+            user_histories[sender_id] = [{"role": "system", "content": "أنت مساعد ذكي ومرح، أجب بالدارجة المغربية باختصار."}]
             
         user_histories[sender_id].append({"role": "user", "content": user_message})
         
         payload = {
-            "model": "llama-3.3-70b-versatile",
-            "messages": user_histories[sender_id],
-            "temperature": 0.5,
-            "max_completion_tokens": 1024
+            "model": "google/gemini-2.5-flash:free", # موديل سريع، مجاني، ويدعم النصوص بكفاءة
+            "messages": user_histories[sender_id]
         }
         
         try:
-            response = requests.post(GROQ_URL, headers=headers, json=payload)
+            response = requests.post(API_URL, headers=headers, json=payload)
             if response.status_code != 200:
                 user_histories[sender_id].pop()
-                print(f"❌ Text Error: {response.text}")
-                return f"API Error: {response.status_code}"
+                print(f"❌ Text API Error: {response.text}")
+                return "API provider error."
             
             ai_text = response.json()['choices'][0]['message']['content']
             user_histories[sender_id].append({"role": "assistant", "content": ai_text})
@@ -66,23 +64,18 @@ def ask_groq(sender_id, user_message, is_image=False):
             if sender_id in user_histories: user_histories[sender_id].pop()
             return "An error occurred."
 
-    # ==========================================
-    # 🖼️ مسار الصور (بدون ذاكرة لتجنب خطأ 400)
-    # ==========================================
+    # Image routing (معزول لضمان النجاح)
     else:
         try:
-            # 1. تحميل الصورة وتحويلها
             image_response = requests.get(user_message)
             image_response.raise_for_status()
             base64_image = base64.b64encode(image_response.content).decode('utf-8')
             image_data_url = f"data:image/jpeg;base64,{base64_image}"
             
-            # 2. إنشاء رسالة معزولة تماما عن الذاكرة القديمة وبدون system prompt
             vision_messages = [
                 {
                     "role": "user",
                     "content": [
-                        # طلبنا منه التحدث بالدارجة هنا بدلاً من الـ system
                         {"type": "text", "text": "شنو كاين فهاد التصويرة؟ شرح ليا بالدارجة المغربية باختصار."},
                         {"type": "image_url", "image_url": {"url": image_data_url}}
                     ]
@@ -90,17 +83,16 @@ def ask_groq(sender_id, user_message, is_image=False):
             ]
             
             payload = {
-                "model": "llama-3.2-11b-vision-preview",
-                "messages": vision_messages,
-                "temperature": 0.5,
-                "max_completion_tokens": 1024
+                # استخدمنا موديل Qwen للرؤية لأنه مجاني، سريع، ولا يواجه مشاكل 400
+                "model": "qwen/qwen-2-vl-7b-instruct:free", 
+                "messages": vision_messages
             }
             
-            response = requests.post(GROQ_URL, headers=headers, json=payload)
+            response = requests.post(API_URL, headers=headers, json=payload)
             
             if response.status_code != 200:
                 print(f"❌ Vision Error: {response.text}")
-                return f"Vision API Error: {response.status_code}"
+                return "Vision API error."
             
             ai_text = response.json()['choices'][0]['message']['content']
             return ai_text
@@ -129,7 +121,7 @@ def webhook():
                 if 'message' in event:
                     msg = event['message']
                     
-                    # Rate Limit Protection
+                    # Rate Limit
                     now = time.time()
                     if now - user_cooldowns.get(sender_id, 0) < COOLDOWN_SECONDS:
                         send_fb_message(sender_id, "Please wait...")
@@ -137,14 +129,14 @@ def webhook():
                     user_cooldowns[sender_id] = now
 
                     if 'text' in msg:
-                        result = ask_groq(sender_id, msg['text'], is_image=False)
+                        result = ask_ai(sender_id, msg['text'], is_image=False)
                         send_fb_message(sender_id, result)
                     
                     elif 'attachments' in msg:
                         for att in msg['attachments']:
                             if att['type'] == 'image':
                                 send_fb_message(sender_id, "Processing image...")
-                                result = ask_groq(sender_id, att['payload']['url'], is_image=True)
+                                result = ask_ai(sender_id, att['payload']['url'], is_image=True)
                                 send_fb_message(sender_id, result)
                                 break
     return "OK", 200
@@ -156,4 +148,4 @@ def send_fb_message(recipient_id, text):
     )
 
 if __name__ == '__main__':
-    app.run()
+    app.run(port=5000, debug=True)
