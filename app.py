@@ -6,85 +6,74 @@ from flask import Flask, request
 app = Flask(__name__)
 
 # ==========================================
-# ⚙️ 1. الإعدادات (Vercel Env Variables)
+# ⚙️ 1. Configuration (Vercel Env Variables)
 # ==========================================
 PAGE_ACCESS_TOKEN = "EAAg9vun0ll4BQ6kUjTMs3qKk2CmjsfbaW5CQd9GWtbxKHWQk8ZAU1j3jWNsR7DME9gNMpl773NffjPyvmCaVT3WCdhanc2qZBhyPdDKozHrGDrkxQJHNI4Wq8mV5i9Kc13ISBNHf4ZBdY071PnSpf2c4KHOJGUyx9RZCazZBsXDvewxrHb8dHA7wYA44s9fWZBltTtsAZDZD"
 VERIFY_TOKEN = "ismail dev"
 FB_API_URL = "https://graph.facebook.com/v19.0/me/messages"
 
-# مفتاح Groq (يُجلب من إعدادات فيرسيل)
-GROQ_API_KEY = os.environ.get("GROQ_API_KE")
+# Groq API Setup
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
-# ذاكرة مؤقتة ونظام الحماية
 user_histories = {}
 user_cooldowns = {}
 COOLDOWN_SECONDS = 30
-MAX_HISTORY = 10
 
 # ==========================================
-# 🧠 2. دوال الذكاء الاصطناعي (Groq)
+# 🧠 2. AI Engine (Groq)
 # ==========================================
 
-def ask_groq(sender_id, content_payload):
-    """إرسال الطلب لـ Groq مع دعم النصوص والصور والذاكرة"""
+def ask_groq(sender_id, user_message, is_image=False):
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
     
-    # 1. تهيئة الذاكرة إذا كانت فارغة
     if sender_id not in user_histories:
-        user_histories[sender_id] = [
-            {"role": "system", "content": "أنت مساعد ذكي ومرح، تم تطيرك بواسطة مطور مستقل مشهور إسمه إسماعيل المعروف على مواقع التواصل بM Ismail dev ولست تابعا لأي شركة مشهورة, أنت تحت تطير وإدارة وتدريب كامل من طرف إسماعيل كليا"}
-        ]
-    
-    # 2. تحويل الـ content_payload إلى هيكل متوافق مع Groq
-    # إذا كان النص بسيطاً، نحوله لقائمة تحتوي على text
-    if isinstance(content_payload, str):
-        actual_content = [{"type": "text", "text": content_payload}]
-    else:
-        actual_content = content_payload
+        user_histories[sender_id] = [{"role": "system", "content": "أنت مساعد ذكي، أجب بالدارجة المغربية باختصار."}]
 
-    # 3. إضافة رسالة المستخدم للذاكرة
-    user_histories[sender_id].append({"role": "user", "content": actual_content})
+    # Model selection: 70b for text, 11b-vision for images
+    model_name = "llama-3.2-11b-vision-preview" if is_image else "llama-3.3-70b-versatile"
+
+    if is_image:
+        content = [
+            {"type": "text", "text": "What is in this image?"},
+            {"type": "image_url", "image_url": {"url": user_message}}
+        ]
+    else:
+        content = user_message
+
+    user_histories[sender_id].append({"role": "user", "content": content})
 
     payload = {
-        "model": "llama-3.2-11b-vision-preview",
+        "model": model_name,
         "messages": user_histories[sender_id],
-        "temperature": 0.7,
-        "max_tokens": 1024
+        "temperature": 0.7
     }
 
     try:
-        response = requests.post(GROQ_URL, json=payload, headers=headers)
+        response = requests.post(GROQ_URL, headers=headers, json=payload)
+        res_json = response.json()
         
-        # إذا كان هناك خطأ في الـ API (مثل مفتاح خاطئ أو Rate Limit)
         if response.status_code != 200:
-            error_info = response.json()
-            print(f"❌ Groq API Error: {error_info}") # سيظهر لك في Vercel Logs
-            return f"Error من Groq: {error_info.get('error', {}).get('message', 'Unknown error')}"
+            print(f"❌ Groq API Error: {res_json}")
+            return "An error occurred with AI provider."
 
-        res_data = response.json()
-        ai_text = res_data['choices'][0]['message']['content']
-        
-        # حفظ رد البوت في الذاكرة
+        ai_text = res_json['choices'][0]['message']['content']
         user_histories[sender_id].append({"role": "assistant", "content": ai_text})
         
-        # تنظيف الذاكرة (آخر 10 رسائل)
-        if len(user_histories[sender_id]) > 10:
-            user_histories[sender_id] = [user_histories[sender_id][0]] + user_histories[sender_id][-10:]
+        # Keep history clean
+        if len(user_histories[sender_id]) > 6:
+            user_histories[sender_id] = [user_histories[sender_id][0]] + user_histories[sender_id][-6:]
             
         return ai_text
-
     except Exception as e:
-        print(f"⚠️ System Error in ask_groq: {str(e)}")
-        # إذا فشل الطلب، نحذف آخر رسالة مستخدم من الذاكرة لكي لا يتخبط البوت
-        user_histories[sender_id].pop()
-        return "try again"
+        print(f"⚠️ System Error: {str(e)}")
+        return "Try again..."
 
 # ==========================================
-# 🌐 3. مسارات الويب والتواصل مع فيسبوك
+# 🌐 3. Webhook Routes
 # ==========================================
 
 @app.route('/webhook', methods=['GET'])
@@ -103,37 +92,31 @@ def webhook():
                 if 'message' in event:
                     msg = event['message']
                     
-                    # 🛡️ Rate Limit
+                    # Rate Limit Protection
                     now = time.time()
                     if now - user_cooldowns.get(sender_id, 0) < COOLDOWN_SECONDS:
-                        send_fb_message(sender_id, "wait...")
+                        send_fb_message(sender_id, "Please wait...")
                         continue
                     user_cooldowns[sender_id] = now
 
-                    # معالجة النصوص
                     if 'text' in msg:
-                        response = ask_groq(sender_id, msg['text'])
-                        send_fb_message(sender_id, response)
+                        result = ask_groq(sender_id, msg['text'], is_image=False)
+                        send_fb_message(sender_id, result)
                     
-                    # معالجة الصور (Vision)
                     elif 'attachments' in msg:
                         for att in msg['attachments']:
                             if att['type'] == 'image':
-                                img_url = att['payload']['url']
-                                send_fb_message(sender_id, "جاري تحليل الصورة...")
-                                # في Groq، نرسل رابط الصورة مباشرة داخل الـ Payload
-                                content = [
-                                    {"type": "text", "text": "ماذا تلاحظ في الصورة"},
-                                    {"type": "image_url", "image_url": {"url": img_url}}
-                                ]
-                                response = ask_groq(sender_id, content)
-                                send_fb_message(sender_id, response)
+                                send_fb_message(sender_id, "Processing image...")
+                                result = ask_groq(sender_id, att['payload']['url'], is_image=True)
+                                send_fb_message(sender_id, result)
                                 break
     return "OK", 200
 
 def send_fb_message(recipient_id, text):
-    payload = {"recipient": {"id": recipient_id}, "message": {"text": text}}
-    requests.post(f"{FB_API_URL}?access_token={PAGE_ACCESS_TOKEN}", json=payload)
+    requests.post(
+        f"{FB_API_URL}?access_token={PAGE_ACCESS_TOKEN}",
+        json={"recipient": {"id": recipient_id}, "message": {"text": text}}
+    )
 
 if __name__ == '__main__':
-    app.run()
+    app.run(port=5000, debug=True)
