@@ -94,9 +94,13 @@ def ask_gemini_text(sender_id, user_text):
                 continue
             else:
                 log_system_error("Gemini Text Generation", error_msg)
-                user_histories[sender_id].pop()
-                return "try again..."
-
+                
+                # أضفنا هذا السطر لحماية إضافية قبل عمل pop
+                if sender_id in user_histories and len(user_histories[sender_id]) > 0:
+                    user_histories[sender_id].pop()
+                
+                # الخدعة: إرسال الخطأ الحقيقي مباشرة لك في ماسنجر!
+                return f"شوف أ عشيري، هذا هو الخطأ لي واقع في Vercel:\n\n{error_msg}"
 def analyze_image_with_gemini(sender_id, image_url):
     max_attempts = len(API_KEYS)
     
