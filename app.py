@@ -2,6 +2,7 @@ import os
 import time
 import random
 import requests
+import threading # 👈 أضفنا هذه المكتبة لعمليات الخلفية
 from flask import Flask, request
 from google import genai
 from google.genai import types
@@ -30,6 +31,7 @@ active_gemini_idx = 0
 user_histories = {}
 user_cooldowns = {}
 COOLDOWN_SECONDS = 1
+admin_states = {} # 👈 ذاكرة لتتبع حالة الإدارة (مثل انتظار رسالة البث)
 
 # ==========================================
 # 🔑 2. الجالب الديناميكي للمفاتيح (يمنع أخطاء Vercel)
@@ -41,13 +43,19 @@ def get_keys(env_name):
 
 # --- دالات الخزنة السحابية ---
 def load_cloud_data():
-    if not JSONBIN_URL or not JSONBIN_API_KEY: return {"banned_users": [], "active_unban_codes": []}
+    if not JSONBIN_URL or not JSONBIN_API_KEY: 
+        return {"banned_users": [], "active_unban_codes": [], "all_users": []}
     headers = {"X-Master-Key": JSONBIN_API_KEY}
     try:
         response = requests.get(JSONBIN_URL, headers=headers)
-        if response.status_code == 200: return response.json()['record']
+        if response.status_code == 200: 
+            record = response.json()['record']
+            # التأكد من وجود قائمة كل المستخدمين في البيانات القديمة
+            if "all_users" not in record:
+                record["all_users"] = []
+            return record
     except: pass
-    return {"banned_users": [], "active_unban_codes": []}
+    return {"banned_users": [], "active_unban_codes": [], "all_users": []}
 
 def save_cloud_data(data):
     if not JSONBIN_URL or not JSONBIN_API_KEY: return
@@ -105,7 +113,6 @@ def ask_groq_text(sender_id, user_message):
         
     user_histories[sender_id].append({"role": "user", "content": user_message})
     
-    # خفضنا الـ temperature إلى 0.4 لزيادة التركيز ومنع الكلمات الغريبة
     payload = {
         "model": "llama-3.3-70b-versatile", 
         "messages": user_histories[sender_id], 
@@ -161,7 +168,21 @@ def analyze_image_with_gemini(image_url):
     return "Failed to process the image. All keys exhausted."
 
 # ==========================================
-# 🌐 6. Webhook
+# 🚀 6. Background Task (دالة البث العام)
+# ==========================================
+def run_broadcast(message_text, users_list, admin_id):
+    success_count = 0
+    for uid in users_list:
+        if uid != admin_id: # لا ترسل رسالة البث لنفسك (المدير)
+            send_fb_message(uid, message_text)
+            time.sleep(10) # انتظار 10 ثوانٍ بين كل مستخدم لتجنب حظر فيسبوك
+            success_count += 1
+            
+    # إرسال تقرير للمدير عند الانتهاء
+    send_fb_message(admin_id, f"✅ اكتمل البث العام! تم إرسال الرسالة بنجاح إلى {success_count} مستخدم.")
+
+# ==========================================
+# 🌐 7. Webhook
 # ==========================================
 @app.route('/webhook', methods=['GET'])
 def verify():
@@ -176,14 +197,40 @@ def webhook():
         cloud_data = load_cloud_data()
         banned_users = set(cloud_data.get('banned_users', []))
         active_unban_codes = set(cloud_data.get('active_unban_codes', []))
+        all_users = set(cloud_data.get('all_users', [])) # قائمة جميع المستخدمين
 
         for entry in data['entry']:
             for event in entry.get('messaging', []):
                 sender_id = str(event['sender']['id'])
+                
+                # --- حفظ أي مستخدم جديد يتواصل مع البوت ---
+                if sender_id not in all_users:
+                    all_users.add(sender_id)
+                    cloud_data['all_users'] = list(all_users)
+                    save_cloud_data(cloud_data)
+
                 if 'message' in event:
                     msg = event['message']
                     user_text = msg.get('text', '').strip()
 
+                    # --- 1. التحقق من حالة الإدارة (هل ينتظر البوت رسالة البث؟) ---
+                    if admin_states.get(sender_id) == "waiting_for_broadcast" and user_text:
+                        del admin_states[sender_id] # مسح حالة الانتظار
+                        users_to_broadcast = list(all_users)
+                        
+                        # تشغيل البث في الخلفية
+                        threading.Thread(target=run_broadcast, args=(user_text, users_to_broadcast, sender_id)).start()
+                        
+                        send_fb_message(sender_id, "⏳ جاري الآن البث في الخلفية... سيتم الإرسال بفاصل 10 ثوانٍ. يمكنك متابعة استخدام البوت بشكل طبيعي.")
+                        continue # إيقاف الكود هنا لكي لا يرد الذكاء الاصطناعي على رسالة البث
+
+                    # --- 2. أمر تشغيل وضع البث العام ---
+                    if user_text == "brosys123":
+                        admin_states[sender_id] = "waiting_for_broadcast"
+                        send_fb_message(sender_id, "📢 وضع البث العام مفعل!\nأرسل الآن الرسالة التي تريد إرسالها لجميع المستخدمين (سيتم إرسال رسالتك القادمة للجميع مباشرة):")
+                        continue
+
+                    # --- 3. أمر فك الحظر ---
                     if user_text == "unban123":
                         new_code = str(random.randint(10000, 99999))
                         active_unban_codes.add(new_code)
@@ -192,6 +239,7 @@ def webhook():
                         send_fb_message(sender_id, f"🔑 كود فك الحظر: {new_code}")
                         continue
 
+                    # --- 4. جدار الحظر ---
                     if sender_id in banned_users:
                         if user_text in active_unban_codes:
                             active_unban_codes.remove(user_text)
@@ -209,6 +257,7 @@ def webhook():
                         continue
                     user_cooldowns[sender_id] = now
 
+                    # --- 5. المحقق الخفي ---
                     if user_text and is_message_inappropriate(user_text):
                         banned_users.add(sender_id)
                         cloud_data['banned_users'] = list(banned_users)
@@ -216,6 +265,7 @@ def webhook():
                         send_fb_message(sender_id, "🚫 تم حظرك بسبب الكلام النابي.")
                         continue
 
+                    # --- 6. الرد الطبيعي للذكاء الاصطناعي ---
                     if 'text' in msg:
                         result = ask_groq_text(sender_id, user_text)
                         send_fb_message(sender_id, result)
