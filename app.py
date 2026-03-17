@@ -14,9 +14,11 @@ PAGE_ACCESS_TOKEN = "EAAg9vun0ll4BQ6kUjTMs3qKk2CmjsfbaW5CQd9GWtbxKHWQk8ZAU1j3jWN
 VERIFY_TOKEN = "ismail dev"
 FB_API_URL = "https://graph.facebook.com/v19.0/me/messages"
 
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-API_URL = "https://openrouter.ai/api/v1/chat/completions"
+# مفتاح Groq للنصوص
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
+# مفتاح Gemini للصور
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 gemini_client = None
@@ -25,17 +27,18 @@ if GEMINI_API_KEY:
 
 user_histories = {}
 user_cooldowns = {}
-COOLDOWN_SECONDS = 1
+COOLDOWN_SECONDS = 30
 
 # ==========================================
-# 🧠 2. Text Engine (OpenRouter)
+# 🧠 2. Text Engine (Groq - Llama 70B)
 # ==========================================
-def ask_ai_text(sender_id, user_message):
+def ask_groq_text(sender_id, user_message):
+    if not GROQ_API_KEY:
+        return "Groq API key is missing in Vercel."
+
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://your-vercel-app-url.vercel.app", 
-        "X-Title": "Messenger Bot"
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
     }
     
     if sender_id not in user_histories:
@@ -44,17 +47,16 @@ def ask_ai_text(sender_id, user_message):
     user_histories[sender_id].append({"role": "user", "content": user_message})
     
     payload = {
-        "model": "google/gemini-2.0-flash-lite-preview-02-05:free",
-        "messages": user_histories[sender_id]
+        "model": "llama-3.3-70b-versatile", # الموديل القوي والمستقر
+        "messages": user_histories[sender_id],
+        "temperature": 0.7
     }
     
     try:
-        response = requests.post(API_URL, headers=headers, json=payload)
+        response = requests.post(GROQ_URL, headers=headers, json=payload)
         if response.status_code != 200:
             user_histories[sender_id].pop()
-            # هذا السطر سيجلب رسالة الخطأ من سيرفرهم ويرسلها لك في الشات
-            error_details = response.json().get('error', {}).get('message', 'Unknown error')
-            return f"OpenRouter Error: {error_details}"
+            return f"Groq Error: {response.json().get('error', {}).get('message', 'Unknown error')}"
         
         ai_text = response.json()['choices'][0]['message']['content']
         user_histories[sender_id].append({"role": "assistant", "content": ai_text})
@@ -64,7 +66,6 @@ def ask_ai_text(sender_id, user_message):
         return ai_text
         
     except Exception as e:
-        print(f"⚠️ Text Exception: {str(e)}")
         if sender_id in user_histories: user_histories[sender_id].pop()
         return "An error occurred."
 
@@ -123,7 +124,7 @@ def webhook():
                     user_cooldowns[sender_id] = now
 
                     if 'text' in msg:
-                        result = ask_ai_text(sender_id, msg['text'])
+                        result = ask_groq_text(sender_id, msg['text'])
                         send_fb_message(sender_id, result)
                     
                     elif 'attachments' in msg:
