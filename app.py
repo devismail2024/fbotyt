@@ -52,8 +52,9 @@ def ask_ai_text(sender_id, user_message):
         response = requests.post(API_URL, headers=headers, json=payload)
         if response.status_code != 200:
             user_histories[sender_id].pop()
-            print(f"❌ Text API Error: {response.text}")
-            return "API provider error."
+            # هذا السطر سيجلب رسالة الخطأ من سيرفرهم ويرسلها لك في الشات
+            error_details = response.json().get('error', {}).get('message', 'Unknown error')
+            return f"OpenRouter Error: {error_details}"
         
         ai_text = response.json()['choices'][0]['message']['content']
         user_histories[sender_id].append({"role": "assistant", "content": ai_text})
