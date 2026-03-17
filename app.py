@@ -25,7 +25,7 @@ if GEMINI_API_KEY:
 
 user_histories = {}
 user_cooldowns = {}
-COOLDOWN_SECONDS = 30
+COOLDOWN_SECONDS = 1
 
 # ==========================================
 # 🧠 2. Text Engine (OpenRouter)
