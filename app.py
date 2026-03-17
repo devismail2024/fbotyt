@@ -91,6 +91,9 @@ def is_message_inappropriate(text):
 # ==========================================
 # 🧠 4. Text Engine
 # ==========================================
+# ==========================================
+# 🧠 4. Text Engine (مع كاشف الأخطاء السري)
+# ==========================================
 def ask_groq_text(sender_id, user_message):
     global active_groq_idx
     groq_keys = get_keys("GROQ_API_KEYS")
@@ -119,6 +122,8 @@ def ask_groq_text(sender_id, user_message):
         "temperature": 0.4
     }
 
+    last_error = "Unknown Error" # 👈 متغير لتخزين رسالة الخطأ الحقيقية
+
     for _ in range(len(groq_keys)):
         current_key = groq_keys[active_groq_idx]
         headers = {"Authorization": f"Bearer {current_key}", "Content-Type": "application/json"}
@@ -131,12 +136,16 @@ def ask_groq_text(sender_id, user_message):
                     user_histories[sender_id] = [user_histories[sender_id][0]] + user_histories[sender_id][-6:]
                 return ai_text
             else:
+                # 👈 التقاط الخطأ من منصة Groq
+                last_error = f"Status {res.status_code}: {res.text}"
                 active_groq_idx = (active_groq_idx + 1) % len(groq_keys)
-        except:
+        except Exception as e:
+            last_error = f"Exception: {str(e)}"
             active_groq_idx = (active_groq_idx + 1) % len(groq_keys)
 
     user_histories[sender_id].pop() 
-    return "عذرا، السيرفرات مشغولة جدا حاليا. جرب مرة أخرى."
+    # 👈 إرسال الخطأ الحقيقي لك في الماسنجر
+    return f"عذرا، السيرفرات مشغولة جدا حاليا.\n⚠️ سبب المشكلة من Groq:\n{last_error}"
 
 # ==========================================
 # 👁️ 5. Vision Engine
