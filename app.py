@@ -14,13 +14,11 @@ PAGE_ACCESS_TOKEN = "EAAg9vun0ll4BQ6kUjTMs3qKk2CmjsfbaW5CQd9GWtbxKHWQk8ZAU1j3jWN
 VERIFY_TOKEN = "ismail dev"
 FB_API_URL = "https://graph.facebook.com/v19.0/me/messages"
 
-# مفاتيح الـ API من Vercel
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-# تهيئة عميل Gemini للصور
 gemini_client = None
 if GEMINI_API_KEY:
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
@@ -37,7 +35,7 @@ def ask_ai_text(sender_id, user_message):
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
         "HTTP-Referer": "https://your-vercel-app-url.vercel.app", 
-        "X-Title": "Messenger Bot" [cite: 2]
+        "X-Title": "Messenger Bot"
     }
     
     if sender_id not in user_histories:
@@ -46,25 +44,25 @@ def ask_ai_text(sender_id, user_message):
     user_histories[sender_id].append({"role": "user", "content": user_message})
     
     payload = {
-        "model": "google/gemini-2.5-flash:free", [cite: 3]
+        "model": "google/gemini-2.5-flash:free",
         "messages": user_histories[sender_id]
     }
     
     try:
         response = requests.post(API_URL, headers=headers, json=payload)
         if response.status_code != 200:
-            user_histories[sender_id].pop() [cite: 4]
+            user_histories[sender_id].pop()
             print(f"❌ Text API Error: {response.text}")
             return "API provider error."
         
-        ai_text = response.json()['choices'][0]['message']['content'] [cite: 5]
+        ai_text = response.json()['choices'][0]['message']['content']
         user_histories[sender_id].append({"role": "assistant", "content": ai_text})
         
         if len(user_histories[sender_id]) > 6:
             user_histories[sender_id] = [user_histories[sender_id][0]] + user_histories[sender_id][-6:]
         return ai_text
         
-    except Exception as e: [cite: 6]
+    except Exception as e:
         print(f"⚠️ Text Exception: {str(e)}")
         if sender_id in user_histories: user_histories[sender_id].pop()
         return "An error occurred."
@@ -114,28 +112,26 @@ def webhook():
         for entry in data['entry']:
             for event in entry.get('messaging', []):
                 sender_id = event['sender']['id']
-                if 'message' in event: [cite: 14]
+                if 'message' in event:
                     msg = event['message']
                     
-                    # Rate Limit
                     now = time.time()
-                    if now - user_cooldowns.get(sender_id, 0) < COOLDOWN_SECONDS: [cite: 15]
+                    if now - user_cooldowns.get(sender_id, 0) < COOLDOWN_SECONDS:
                         send_fb_message(sender_id, "Please wait...")
                         continue
                     user_cooldowns[sender_id] = now
 
-                    # التوجيه الذكي (Routing)
-                    if 'text' in msg: [cite: 16]
+                    if 'text' in msg:
                         result = ask_ai_text(sender_id, msg['text'])
                         send_fb_message(sender_id, result)
                     
-                    elif 'attachments' in msg: [cite: 17]
+                    elif 'attachments' in msg:
                         for att in msg['attachments']:
                             if att['type'] == 'image':
-                                send_fb_message(sender_id, "Processing image...") [cite: 18]
+                                send_fb_message(sender_id, "Processing image...")
                                 result = analyze_image_with_gemini(att['payload']['url'])
                                 send_fb_message(sender_id, result)
-                                break [cite: 19]
+                                break
     return "OK", 200
 
 def send_fb_message(recipient_id, text):
@@ -145,4 +141,4 @@ def send_fb_message(recipient_id, text):
     )
 
 if __name__ == '__main__':
-    app.run(port=5000, debug=True)
+    app.run()
