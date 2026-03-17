@@ -44,7 +44,7 @@ def ask_ai_text(sender_id, user_message):
     user_histories[sender_id].append({"role": "user", "content": user_message})
     
     payload = {
-        "model": "google/gemini-2.5-flash:free",
+        "model": "meta-llama/llama-3-8b-instruct:free",
         "messages": user_histories[sender_id]
     }
     
