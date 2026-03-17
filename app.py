@@ -1,5 +1,6 @@
 import os
 import time
+import random # 👈 أضفنا هذه المكتبة لتوليد الأرقام العشوائية
 import requests
 from flask import Flask, request
 from google import genai
@@ -16,7 +17,7 @@ FB_API_URL = "https://graph.facebook.com/v19.0/me/messages"
 
 # مفتاح Groq للنصوص
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-# مفتاح المحقق الخفي الجديد
+# مفتاح المحقق الخفي 
 GROQ_DETECTIVE_API_KEY = os.environ.get("GROQ_DETECTIVE_API_KEY") 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -30,14 +31,16 @@ if GEMINI_API_KEY:
 user_histories = {}
 user_cooldowns = {}
 COOLDOWN_SECONDS = 1
+
 banned_users = set() # الذاكرة الحية للمحظورين
+active_unban_codes = set() # 👈 الذاكرة الحية لرموز فك الحظر المؤقتة (OTP)
 
 # ==========================================
 # 🛑 2. Detective Engine (المحقق الخفي)
 # ==========================================
 def is_message_inappropriate(text):
     if not GROQ_DETECTIVE_API_KEY:
-        return False # تمرير الرسالة إذا لم نضع المفتاح بعد
+        return False
 
     headers = {
         "Authorization": f"Bearer {GROQ_DETECTIVE_API_KEY}",
@@ -87,7 +90,7 @@ def ask_groq_text(sender_id, user_message):
     user_histories[sender_id].append({"role": "user", "content": user_message})
     
     payload = {
-        "model": "llama-3.3-70b-versatile", # الموديل القوي والمستقر
+        "model": "llama-3.3-70b-versatile",
         "messages": user_histories[sender_id],
         "temperature": 0.7
     }
@@ -155,8 +158,29 @@ def webhook():
             for event in entry.get('messaging', []):
                 sender_id = event['sender']['id']
                 
-                # 🛑 1. التحقق من اللائحة السوداء أولاً
+                if 'message' in event:
+                    msg = event['message']
+                    # استخراج النص بأمان (حتى لو أرسل المستخدم صورة)
+                    user_text = msg.get('text', '').strip()
+
+                    # 👑 أمر الإدارة السري: توليد رمز OTP لفك الحظر
+                    if user_text == "unban123":
+                        new_code = str(random.randint(10000, 99999))
+                        active_unban_codes.add(new_code)
+                        send_fb_message(sender_id, f"🔑 تم توليد رمز فك حظر جديد: {new_code}\nهذا الرمز صالح لمرة واحدة فقط. أعطه للمستخدم المحظور.")
+                        continue # إيقاف الكود هنا (الذكاء الاصطناعي لا يتدخل أبداً)
+                        
+                # 🛑 1. التحقق من اللائحة السوداء
                 if sender_id in banned_users:
+                    if 'message' in event and 'text' in event['message']:
+                        # إذا كان المستخدم محظوراً وأدخل رمزاً صحيحاً من الرموز النشطة
+                        if user_text in active_unban_codes:
+                            active_unban_codes.remove(user_text) # حرق الرمز فوراً لكي لا يستخدم مجدداً
+                            banned_users.remove(sender_id) # رفع الحظر عن المستخدم
+                            send_fb_message(sender_id, "✅ تم قبول الرمز! لقد تم فك الحظر عنك بنجاح. يرجى احترام القوانين من الآن فصاعداً. يمكنك التحدث معي الآن.")
+                            continue
+                    
+                    # إذا كان محظوراً ولم يدخل الرمز الصحيح، يستمر تجاهله بصمت
                     continue 
 
                 if 'message' in event:
@@ -169,12 +193,10 @@ def webhook():
                     user_cooldowns[sender_id] = now
 
                     if 'text' in msg:
-                        user_text = msg['text']
-                        
                         # 🛑 2. إرسال النص للمحقق الخفي
                         if is_message_inappropriate(user_text):
                             banned_users.add(sender_id)
-                            send_fb_message(sender_id, "تم حظرك نهائياً من استخدام البوت بسبب الكلام النابي. 🚫")
+                            send_fb_message(sender_id, "تم حظرك نهائياً من استخدام البوت بسبب الكلام النابي. 🚫\n(إذا كنت تعتقد أن هذا خطأ، تواصل مع المطور للحصول على رمز فك الحظر).")
                             continue # إنهاء المعالجة هنا
                             
                         # إذا كان النص نظيفاً، يتم إرساله لمحرك النصوص
