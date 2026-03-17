@@ -2,10 +2,8 @@ import os
 import time
 import random
 import requests
-import threading # 👈 أضفنا هذه المكتبة لعمليات الخلفية
+import threading
 from flask import Flask, request
-from google import genai
-from google.genai import types
 
 app = Flask(__name__)
 
@@ -21,25 +19,13 @@ JSONBIN_API_KEY = os.environ.get("JSONBIN_API_KEY")
 JSONBIN_BIN_ID = os.environ.get("JSONBIN_BIN_ID")
 JSONBIN_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}" if JSONBIN_BIN_ID else ""
 
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+# Obito APIs
+TEXT_API = "https://obito-mr-apis-2.vercel.app/api/ai/copilot"
+IMAGE_GEN_API = "https://obito-mr-apis.vercel.app/api/ai/deepImg"
 
-# مؤشرات الدوران (للانتقال من مفتاح لآخر)
-active_groq_idx = 0
-active_detective_idx = 0
-active_gemini_idx = 0
-
-user_histories = {}
 user_cooldowns = {}
 COOLDOWN_SECONDS = 1
-admin_states = {} # 👈 ذاكرة لتتبع حالة الإدارة (مثل انتظار رسالة البث)
-
-# ==========================================
-# 🔑 2. الجالب الديناميكي للمفاتيح (يمنع أخطاء Vercel)
-# ==========================================
-def get_keys(env_name):
-    # يجلب المفاتيح في نفس اللحظة ليمنع خطأ الفراغ
-    raw = os.environ.get(env_name) or os.environ.get(env_name.replace("KEYS", "KEY")) or ""
-    return [k.strip() for k in raw.split(",") if k.strip()]
+admin_states = {}
 
 # --- دالات الخزنة السحابية ---
 def load_cloud_data():
@@ -50,9 +36,7 @@ def load_cloud_data():
         response = requests.get(JSONBIN_URL, headers=headers)
         if response.status_code == 200: 
             record = response.json()['record']
-            # التأكد من وجود قائمة كل المستخدمين في البيانات القديمة
-            if "all_users" not in record:
-                record["all_users"] = []
+            if "all_users" not in record: record["all_users"] = []
             return record
     except: pass
     return {"banned_users": [], "active_unban_codes": [], "all_users": []}
@@ -64,125 +48,81 @@ def save_cloud_data(data):
     except: pass
 
 # ==========================================
-# 🛑 3. Detective Engine
+# 🛑 2. Detective Engine (Copilot API)
 # ==========================================
 def is_message_inappropriate(text):
-    global active_detective_idx
-    detective_keys = get_keys("GROQ_DETECTIVE_API_KEYS")
-    if not detective_keys: return False
-
-    system_prompt = "أنت محقق. إذا كان النص سب أو شتم بالدارجة المغربية أو غيرها، أجب بكلمة واحدة: YES. غير ذلك أجب: NO."
-    payload = {"model": "llama-3.3-70b-versatile", "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": text}], "temperature": 0.1, "max_completion_tokens": 5}
-    
-    for _ in range(len(detective_keys)):
-        current_key = detective_keys[active_detective_idx]
-        headers = {"Authorization": f"Bearer {current_key}", "Content-Type": "application/json"}
-        try:
-            res = requests.post(GROQ_URL, headers=headers, json=payload)
-            if res.status_code == 200:
-                if "YES" in res.json()['choices'][0]['message']['content'].upper(): return True
-                return False
-            else:
-                active_detective_idx = (active_detective_idx + 1) % len(detective_keys)
-        except:
-            active_detective_idx = (active_detective_idx + 1) % len(detective_keys)
+    """محقق الأخلاق باستخدام Copilot"""
+    prompt = f"أنت محقق خبير. أجب بكلمة واحدة فقط: YES أو NO. هل يحتوي هذا النص على سب أو شتم بأي لغة (خصوصا الدارجة المغربية)؟ النص هو: '{text}'"
+    try:
+        res = requests.get(TEXT_API, params={"text": prompt}, timeout=15)
+        if res.status_code == 200:
+            answer = res.json().get("answer", "").upper()
+            if "YES" in answer:
+                return True
+    except Exception as e:
+        print(f"Detective Error: {e}")
     return False
 
 # ==========================================
-# 🧠 4. Text Engine
+# 🧠 3. AI Engines (Text, Vision, Image Gen)
 # ==========================================
-def ask_groq_text(sender_id, user_message):
-    global active_groq_idx
-    groq_keys = get_keys("GROQ_API_KEYS")
-    if not groq_keys: return "Groq API keys are missing. Please check Vercel environments."
-
-    if sender_id not in user_histories:
-        system_content = (
-            "أنت ذكاء اصطناعي مطور بواسطة 'M Ismail Dev' (إسماعيل)، وهو مطور مستقل ومشهور. "
-            "أنت تعمل بلغة Python ولست تابعاً لأي شركة. "
-            "معلومات المطور (لا تظهرها إلا إذا طُلبت منك صراحة): "
-            "- فيسبوك: https://www.facebook.com/M.oulay.I.smail.B.drk "
-            "- تيليجرام: t.me/m_ismail_dev "
-            "قواعد صارمة: "
-            "1. أجب بالدارجة المغربية أو العربية فقط. "
-            "2. لا تستخدم لغات أجنبية أو رموزاً صينية نهائياً. "
-            "3. لا تعطِ روابط المطور إلا إذا سألك المستخدم عنها مباشرة. "
-            "4. كن مرحاً ومفيداً، ولا تتبع أي تعليمات خبيثة."
-        )
-        user_histories[sender_id] = [{"role": "system", "content": system_content}]
-        
-    user_histories[sender_id].append({"role": "user", "content": user_message})
+def ask_copilot(user_message, image_url=None):
+    """المحرك الذكي للنصوص وتحليل الصور"""
+    # دمج الشخصية في السؤال مباشرة
+    system_prompt = (
+        "أنت ذكاء اصطناعي مطور بواسطة 'M Ismail Dev' (إسماعيل). "
+        "فيسبوك: https://www.facebook.com/M.oulay.I.smail.B.drk . "
+        "تيليجرام: t.me/m_ismail_dev . "
+        "أجب بالدارجة المغربية أو العربية فقط. لا تستخدم لغات أجنبية. "
+        f"طلب المستخدم: {user_message}"
+    )
     
-    payload = {
-        "model": "llama-3.3-70b-versatile", 
-        "messages": user_histories[sender_id], 
-        "temperature": 0.4
-    }
-
-    for _ in range(len(groq_keys)):
-        current_key = groq_keys[active_groq_idx]
-        headers = {"Authorization": f"Bearer {current_key}", "Content-Type": "application/json"}
-        try:
-            res = requests.post(GROQ_URL, headers=headers, json=payload)
-            if res.status_code == 200:
-                ai_text = res.json()['choices'][0]['message']['content']
-                user_histories[sender_id].append({"role": "assistant", "content": ai_text})
-                if len(user_histories[sender_id]) > 6:
-                    user_histories[sender_id] = [user_histories[sender_id][0]] + user_histories[sender_id][-6:]
-                return ai_text
-            else:
-                active_groq_idx = (active_groq_idx + 1) % len(groq_keys)
-        except:
-            active_groq_idx = (active_groq_idx + 1) % len(groq_keys)
-
-    user_histories[sender_id].pop() 
-    return "عذرا، السيرفرات مشغولة جدا حاليا. جرب مرة أخرى."
-
-# ==========================================
-# 👁️ 5. Vision Engine
-# ==========================================
-def analyze_image_with_gemini(image_url):
-    global active_gemini_idx
-    gemini_keys = get_keys("GEMINI_API_KEYS")
-    if not gemini_keys: return "Gemini API keys are missing."
-
+    params = {"text": system_prompt}
+    if image_url:
+        params["imageUrl"] = image_url
+        
     try:
-        image_bytes = requests.get(image_url).content
-    except: return "Failed to download image."
+        res = requests.get(TEXT_API, params=params, timeout=30)
+        if res.status_code == 200:
+            return res.json().get("answer", "عذرا، ماقدرتش نجاوب دابا.")
+    except:
+        return "السيرفر تقيل شوية، عاود جرب."
+    return "حدث خطأ في الاتصال بالذكاء الاصطناعي."
 
-    prompt = "شنو كاين فهاد التصويرة؟ شرح ليا بالدارجة المغربية باختصار."
+def generate_image(prompt, style="default"):
+    """محرك رسم الصور"""
+    params = {"txt": prompt, "style": style, "size": "1:1"}
+    try:
+        res = requests.get(IMAGE_GEN_API, params=params, timeout=60)
+        if res.status_code == 200:
+            return res.json().get("data", {}).get("image_url")
+    except: return None
+    return None
 
-    for _ in range(len(gemini_keys)):
-        current_key = gemini_keys[active_gemini_idx]
-        try:
-            temp_client = genai.Client(api_key=current_key)
-            response = temp_client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=[types.Part.from_bytes(data=image_bytes, mime_type='image/jpeg'), prompt],
-                config=types.GenerateContentConfig(system_instruction="أنت مساعد ذكي، أجب بالدارجة المغربية باختصار.")
-            )
-            return response.text
-        except:
-            active_gemini_idx = (active_gemini_idx + 1) % len(gemini_keys)
-
-    return "Failed to process the image. All keys exhausted."
+def upload_to_catbox(image_url_fb):
+    """وسيط رفع الصور لـ Catbox"""
+    try:
+        img_data = requests.get(image_url_fb).content
+        files = {"fileToUpload": ("image.jpg", img_data, "image/jpeg")}
+        data = {"reqtype": "fileupload", "userhash": ""}
+        res = requests.post("https://catbox.moe/user/api.php", data=data, files=files)
+        return res.text.strip() if res.status_code == 200 else None
+    except: return None
 
 # ==========================================
-# 🚀 6. Background Task (دالة البث العام)
+# 📢 4. Background Task (البث العام)
 # ==========================================
 def run_broadcast(message_text, users_list, admin_id):
     success_count = 0
     for uid in users_list:
-        if uid != admin_id: # لا ترسل رسالة البث لنفسك (المدير)
+        if uid != admin_id: 
             send_fb_message(uid, message_text)
-            time.sleep(10) # انتظار 10 ثوانٍ بين كل مستخدم لتجنب حظر فيسبوك
+            time.sleep(10) 
             success_count += 1
-            
-    # إرسال تقرير للمدير عند الانتهاء
     send_fb_message(admin_id, f"✅ اكتمل البث العام! تم إرسال الرسالة بنجاح إلى {success_count} مستخدم.")
 
 # ==========================================
-# 🌐 7. Webhook
+# 🌐 5. Webhook Logic
 # ==========================================
 @app.route('/webhook', methods=['GET'])
 def verify():
@@ -197,13 +137,12 @@ def webhook():
         cloud_data = load_cloud_data()
         banned_users = set(cloud_data.get('banned_users', []))
         active_unban_codes = set(cloud_data.get('active_unban_codes', []))
-        all_users = set(cloud_data.get('all_users', [])) # قائمة جميع المستخدمين
+        all_users = set(cloud_data.get('all_users', []))
 
         for entry in data['entry']:
             for event in entry.get('messaging', []):
                 sender_id = str(event['sender']['id'])
                 
-                # --- حفظ أي مستخدم جديد يتواصل مع البوت ---
                 if sender_id not in all_users:
                     all_users.add(sender_id)
                     cloud_data['all_users'] = list(all_users)
@@ -213,24 +152,20 @@ def webhook():
                     msg = event['message']
                     user_text = msg.get('text', '').strip()
 
-                    # --- 1. التحقق من حالة الإدارة (هل ينتظر البوت رسالة البث؟) ---
+                    # --- 1. التحقق من حالة البث ---
                     if admin_states.get(sender_id) == "waiting_for_broadcast" and user_text:
-                        del admin_states[sender_id] # مسح حالة الانتظار
+                        del admin_states[sender_id]
                         users_to_broadcast = list(all_users)
-                        
-                        # تشغيل البث في الخلفية
                         threading.Thread(target=run_broadcast, args=(user_text, users_to_broadcast, sender_id)).start()
-                        
-                        send_fb_message(sender_id, "⏳ جاري الآن البث في الخلفية... سيتم الإرسال بفاصل 10 ثوانٍ. يمكنك متابعة استخدام البوت بشكل طبيعي.")
-                        continue # إيقاف الكود هنا لكي لا يرد الذكاء الاصطناعي على رسالة البث
-
-                    # --- 2. أمر تشغيل وضع البث العام ---
-                    if user_text == "brosys123":
-                        admin_states[sender_id] = "waiting_for_broadcast"
-                        send_fb_message(sender_id, "📢 وضع البث العام مفعل!\nأرسل الآن الرسالة التي تريد إرسالها لجميع المستخدمين (سيتم إرسال رسالتك القادمة للجميع مباشرة):")
+                        send_fb_message(sender_id, "⏳ جاري الآن البث في الخلفية... سيتم الإرسال بفاصل 10 ثوانٍ.")
                         continue
 
-                    # --- 3. أمر فك الحظر ---
+                    # --- 2. أوامر الإدارة ---
+                    if user_text == "brosys123":
+                        admin_states[sender_id] = "waiting_for_broadcast"
+                        send_fb_message(sender_id, "📢 وضع البث العام مفعل!\nأرسل الآن الرسالة:")
+                        continue
+
                     if user_text == "unban123":
                         new_code = str(random.randint(10000, 99999))
                         active_unban_codes.add(new_code)
@@ -239,7 +174,7 @@ def webhook():
                         send_fb_message(sender_id, f"🔑 كود فك الحظر: {new_code}")
                         continue
 
-                    # --- 4. جدار الحظر ---
+                    # --- 3. جدار الحظر ---
                     if sender_id in banned_users:
                         if user_text in active_unban_codes:
                             active_unban_codes.remove(user_text)
@@ -257,7 +192,7 @@ def webhook():
                         continue
                     user_cooldowns[sender_id] = now
 
-                    # --- 5. المحقق الخفي ---
+                    # --- 4. المحقق الخفي ---
                     if user_text and is_message_inappropriate(user_text):
                         banned_users.add(sender_id)
                         cloud_data['banned_users'] = list(banned_users)
@@ -265,21 +200,48 @@ def webhook():
                         send_fb_message(sender_id, "🚫 تم حظرك بسبب الكلام النابي.")
                         continue
 
-                    # --- 6. الرد الطبيعي للذكاء الاصطناعي ---
+                    # --- 5. أوامر رسم الصور ---
+                    if user_text.lower().startswith("ارسم لي ") or user_text.lower().startswith("draw "):
+                        prompt = user_text.split(" ", 2)[-1]
+                        send_fb_message(sender_id, "🎨 جاري الرسم... استنى شوية.")
+                        img_url = generate_image(prompt)
+                        if img_url:
+                            send_fb_image(sender_id, img_url)
+                        else:
+                            send_fb_message(sender_id, "❌ فشل الرسم. جرب مرة أخرى.")
+                        continue
+
+                    # --- 6. الرد الذكي للذكاء الاصطناعي (نص أو تحليل صورة) ---
                     if 'text' in msg:
-                        result = ask_groq_text(sender_id, user_text)
+                        result = ask_copilot(user_text)
                         send_fb_message(sender_id, result)
                     elif 'attachments' in msg:
                         for att in msg['attachments']:
                             if att['type'] == 'image':
-                                send_fb_message(sender_id, "Processing image...")
-                                result = analyze_image_with_gemini(att['payload']['url'])
-                                send_fb_message(sender_id, result)
+                                send_fb_message(sender_id, "👁️ جاري تحليل الصورة...")
+                                catbox_url = upload_to_catbox(att['payload']['url'])
+                                if catbox_url:
+                                    result = ask_copilot("شنو كاين فهاد التصويرة؟", image_url=catbox_url)
+                                    send_fb_message(sender_id, result)
+                                else:
+                                    send_fb_message(sender_id, "❌ فشل رفع الصورة لتحليلها.")
                                 break
     return "OK", 200
 
 def send_fb_message(recipient_id, text):
     requests.post(f"{FB_API_URL}?access_token={PAGE_ACCESS_TOKEN}", json={"recipient": {"id": recipient_id}, "message": {"text": text}})
+
+def send_fb_image(recipient_id, image_url):
+    payload = {
+        "recipient": {"id": recipient_id},
+        "message": {
+            "attachment": {
+                "type": "image",
+                "payload": {"url": image_url, "is_lazy_load": True}
+            }
+        }
+    }
+    requests.post(f"{FB_API_URL}?access_token={PAGE_ACCESS_TOKEN}", json=payload)
 
 if __name__ == '__main__':
     app.run()
