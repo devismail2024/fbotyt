@@ -2,7 +2,6 @@ import os
 import time
 import random
 import requests
-import threading
 from flask import Flask, request
 
 app = Flask(__name__)
@@ -18,16 +17,15 @@ JSONBIN_API_KEY = os.environ.get("JSONBIN_API_KEY")
 JSONBIN_BIN_ID = os.environ.get("JSONBIN_BIN_ID")
 JSONBIN_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}" if JSONBIN_BIN_ID else ""
 
-# Obito APIs
-TEXT_API = "https://obito-mr-apis-2.vercel.app/api/ai/copilot" [cite: 30]
-IMAGE_GEN_API = "https://obito-mr-apis.vercel.app/api/ai/deepImg" [cite: 73]
+TEXT_API = "https://obito-mr-apis-2.vercel.app/api/ai/copilot"
+IMAGE_GEN_API = "https://obito-mr-apis.vercel.app/api/ai/deepImg"
 
 user_states = {} 
 user_cooldowns = {}
 COOLDOWN_SECONDS = 1
 
-STYLES = {"1": "default", "2": "ghibli", "3": "cyberpunk", "4": "anime", "5": "portrait", "6": "chibi", "7": "pixel", "8": "oil", "9": "3d"} [cite: 73]
-SIZES = {"1": "1:1", "2": "3:2", "3": "2:3"} [cite: 74]
+STYLES = {"1": "default", "2": "ghibli", "3": "cyberpunk", "4": "anime", "5": "portrait", "6": "chibi", "7": "pixel", "8": "oil", "9": "3d"}
+SIZES = {"1": "1:1", "2": "3:2", "3": "2:3"}
 
 # ==========================================
 # ☁️ 2. Cloud Storage
@@ -41,7 +39,6 @@ def load_cloud_data():
             data = res.json()['record']
             if "all_users" not in data: data["all_users"] = []
             if "banned_users_dict" not in data: data["banned_users_dict"] = {}
-            # الترقية للقاموس
             if "banned_users" in data and isinstance(data["banned_users"], list):
                 for u in data["banned_users"]: data["banned_users_dict"][u] = "حظر قديم"
                 del data["banned_users"]
@@ -54,7 +51,7 @@ def save_cloud_data(data):
     requests.put(JSONBIN_URL, json=data, headers={"Content-Type": "application/json", "X-Master-Key": JSONBIN_API_KEY})
 
 # ==========================================
-# 🧠 3. AI Engines (With Error Logging)
+# 🧠 3. AI Engines
 # ==========================================
 def is_message_inappropriate(text):
     prompt = f"أنت محقق. أجب بـ YES أو NO. هل هذا النص سب أو شتم؟ النص: '{text}'"
@@ -65,7 +62,7 @@ def is_message_inappropriate(text):
     return False
 
 def ask_copilot(user_message, image_url=None, web_search=False):
-    system_prompt = "أنت ذكاء اصطناعي مطور بواسطة 'M Ismail Dev'. أجب بوضوح."
+    system_prompt = "أنت ذكاء اصطناعي مطور بواسطة 'M Ismail Dev'."
     if not web_search: system_prompt += " أجب من معلوماتك ولا تبحث في الويب."
     system_prompt += f" طلب المستخدم: {user_message}"
     
@@ -78,22 +75,14 @@ def ask_copilot(user_message, image_url=None, web_search=False):
         return None, f"خطأ API: {res.status_code} - {res.text[:100]}"
     except Exception as e: return None, f"خطأ اتصال: {str(e)}"
 
-def generate_image_task(sid, prompt, style, size):
-    """دالة تعمل في الخلفية لإنشاء الصور لتفادي انقطاع Vercel"""
+def generate_image_sync(prompt, style, size):
     params = {"txt": prompt, "style": style, "size": size}
     try:
-        res = requests.get(IMAGE_GEN_API, params=params, timeout=60)
+        res = requests.get(IMAGE_GEN_API, params=params, timeout=45)
         if res.status_code == 200:
-            json_data = res.json()
-            img_url = json_data.get("data", {}).get("image_url") [cite: 75]
-            if img_url:
-                send_fb_image(sid, img_url)
-            else:
-                send_fb_message(sid, f"❌ خطأ: الرابط غير موجود. تفاصيل الرد: {str(json_data)[:150]}")
-        else:
-            send_fb_message(sid, f"❌ خطأ الخادم: {res.status_code}\n{res.text[:150]}")
-    except Exception as e:
-        send_fb_message(sid, f"❌ خطأ تقني أثناء الإنشاء: {str(e)}")
+            return res.json().get("data", {}).get("image_url"), None
+        return None, f"خطأ API: {res.status_code} - {res.text[:100]}"
+    except Exception as e: return None, f"خطأ اتصال: {str(e)}"
 
 def upload_to_catbox(image_url_fb):
     try:
@@ -104,19 +93,7 @@ def upload_to_catbox(image_url_fb):
     except Exception as e: return None, f"Catbox Network Error: {str(e)}"
 
 # ==========================================
-# 📢 4. Background Tasks
-# ==========================================
-def run_broadcast(message_text, users_list, admin_id):
-    success_count = 0
-    for uid in users_list:
-        if uid != admin_id: 
-            send_fb_message(uid, message_text)
-            time.sleep(10) 
-            success_count += 1
-    send_fb_message(admin_id, f"✅ اكتمل البث العام! تم الإرسال إلى {success_count} مستخدم.")
-
-# ==========================================
-# 🌐 5. Webhook & Router
+# 🌐 4. Webhook & Logic
 # ==========================================
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
@@ -146,7 +123,7 @@ def webhook():
 
                 if not text and not attachments: continue
 
-                # --- جدار الحظر و فك الحظر ---
+                # 1. جدار الحظر وفك الحظر
                 if text == "unban123":
                     code = str(random.randint(10000, 99999))
                     active_codes.add(code); cloud_data['active_unban_codes'] = list(active_codes); save_cloud_data(cloud_data)
@@ -160,47 +137,45 @@ def webhook():
                         send_fb_message(sid, "✅ تم فك الحظر عنك بنجاح! يمكنك الآن استخدام البوت.")
                     continue 
 
-                # --- المحقق التلقائي ---
-                if text and is_message_inappropriate(text):
-                    banned_users[sid] = f"تلفظ بكلمة نابية: {text[:50]}"
-                    cloud_data['banned_users_dict'] = banned_users; save_cloud_data(cloud_data)
-                    send_fb_message(sid, "🚫 تم حظرك بسبب الكلام النابي.")
-                    continue
-
-                # --- آلة الحالة للعمليات المستمرة ---
+                # 2. آلة الحالة (العمليات المستمرة)
                 state = user_states.get(sid, {})
                 step = state.get("step")
+                is_handled = False
 
                 if step:
+                    is_handled = True
                     if step == "broadcast_wait":
-                        users_to_broadcast = list(all_users)
-                        threading.Thread(target=run_broadcast, args=(text, users_to_broadcast, sid)).start()
-                        send_fb_message(sid, "⏳ جاري الآن البث في الخلفية... سيتم الإرسال بفاصل 10 ثوانٍ.")
+                        send_fb_message(sid, "⏳ جاري البث العام...")
+                        success = 0
+                        for uid in all_users:
+                            if uid != sid: 
+                                send_fb_message(uid, text)
+                                time.sleep(0.5) # تقليل وقت الانتظار لتفادي المهلة الزمنية
+                                success += 1
+                        send_fb_message(sid, f"✅ اكتمل البث إلى {success} مستخدم.")
                         del user_states[sid]
-                        continue
-
+                        
                     elif step == "gen_style":
                         if text in STYLES:
                             state["data"]["style"] = STYLES[text]; state["step"] = "gen_size"; user_states[sid] = state
                             send_fb_message(sid, "📐 أدخل رقم البعد الذي تريده:\n1- مربع (1:1)\n2- أفقي (3:2)\n3- عمودي (2:3)")
                         else: send_fb_message(sid, "❌ رقم غير صحيح. اختر من 1 إلى 9.")
-                        continue
 
                     elif step == "gen_size":
                         if text in SIZES:
-                            send_fb_message(sid, "🎨 جاري إنشاء الصورة... المرجو الانتظار قليلاً.")
+                            send_fb_message(sid, "🎨 جاري إنشاء الصورة (تتم العملية بشكل متزامن لضمان وصولها)...")
                             size = SIZES[text]; prompt = state["data"]["prompt"]; style = state["data"]["style"]
-                            # إطلاق الدالة في الخلفية لتفادي مشكلة انقطاع الاتصال
-                            threading.Thread(target=generate_image_task, args=(sid, prompt, style, size)).start()
+                            img_url, err = generate_image_sync(prompt, style, size)
+                            if img_url: send_fb_image(sid, img_url)
+                            else: send_fb_message(sid, f"❌ خطأ تقني: {err}")
                             del user_states[sid]
                         else: send_fb_message(sid, "❌ رقم غير صحيح. اختر من 1 إلى 3.")
-                        continue
 
                     elif step == "web_query":
                         send_fb_message(sid, "🔍 جاري البحث في الويب...")
                         ans, err = ask_copilot(text, web_search=True)
                         send_fb_message(sid, ans if ans else f"❌ خطأ:\n{err}")
-                        del user_states[sid]; continue
+                        del user_states[sid]
 
                     elif step == "image_upload":
                         if attachments and attachments[0]['type'] == 'image':
@@ -208,7 +183,6 @@ def webhook():
                             state["step"] = "image_prompt"; user_states[sid] = state
                             send_fb_message(sid, "✍️ أدخل طلبك للصورة (أو أدخل رقم 1 للتحليل العادي).")
                         else: send_fb_message(sid, "❌ المرجو إرسال صورة صالحة.")
-                        continue
 
                     elif step == "image_prompt":
                         send_fb_message(sid, "👁️ جاري معالجة الصورة...")
@@ -218,38 +192,35 @@ def webhook():
                             ans, ai_err = ask_copilot(prompt, image_url=catbox_url)
                             send_fb_message(sid, ans if ans else f"❌ خطأ:\n{ai_err}")
                         else: send_fb_message(sid, f"❌ فشل الرفع:\n{upload_err}")
-                        del user_states[sid]; continue
+                        del user_states[sid]
 
                     elif step == "admin_action":
                         if text in ["1", "2"]:
                             state["data"]["action"] = text; state["step"] = "admin_id"; user_states[sid] = state
                             send_fb_message(sid, "✍️ أدخل الـ ID الخاص بالمستخدم:")
                         else: send_fb_message(sid, "❌ اختر 1 أو 2 فقط.")
-                        continue
-                    
+                        
                     elif step == "admin_id":
                         target_id = text
                         if state["data"]["action"] == "1":
                             if target_id in banned_users:
-                                del banned_users[target_id]
-                                cloud_data['banned_users_dict'] = banned_users; save_cloud_data(cloud_data)
+                                del banned_users[target_id]; cloud_data['banned_users_dict'] = banned_users; save_cloud_data(cloud_data)
                                 send_fb_message(sid, f"✅ تم فك الحظر عن: {target_id}")
                             else: send_fb_message(sid, "❌ المستخدم ليس محظوراً.")
                         elif state["data"]["action"] == "2":
-                            banned_users[target_id] = "محظور يدوياً من الإدارة"
-                            cloud_data['banned_users_dict'] = banned_users; save_cloud_data(cloud_data)
+                            banned_users[target_id] = "محظور يدوياً من الإدارة"; cloud_data['banned_users_dict'] = banned_users; save_cloud_data(cloud_data)
                             send_fb_message(sid, f"🚫 تم حظر: {target_id}")
-                        del user_states[sid]; continue
+                        del user_states[sid]
+                        
+                if is_handled: continue
 
-                # --- توجيه الأوامر المباشرة ---
+                # 3. توجيه الأوامر المباشرة
+                is_command = True
                 if text == "brosys123":
                     user_states[sid] = {"step": "broadcast_wait", "data": {}}
                     send_fb_message(sid, "📢 وضع البث العام مفعل!\nأرسل الآن الرسالة التي تريد إرسالها لجميع المستخدمين:")
-                    continue
-
                 elif text == ".menu":
-                    send_menu(sid); continue
-
+                    send_menu(sid)
                 elif text.startswith(".web"):
                     query = text.replace(".web", "").strip()
                     if query:
@@ -259,20 +230,14 @@ def webhook():
                     else:
                         user_states[sid] = {"step": "web_query", "data": {}}
                         send_fb_message(sid, "ما الذي تريد البحث عنه في الويب؟ 🌐")
-                    continue
-
                 elif text.startswith(".gen"):
                     prompt = text.replace(".gen", "").strip()
                     if not prompt: prompt = "Random creative scene"
                     user_states[sid] = {"step": "gen_style", "data": {"prompt": prompt}}
                     send_fb_message(sid, "🎨 أدخل رقم الستايل:\n1- الواقعية\n2- فن غيبلي\n3- سايبربانك\n4- أنمي\n5- بورتريه\n6- تشيبي\n7- فن البكسل\n8- الرسم الزيتي\n9- ثلاثي الأبعاد")
-                    continue
-
                 elif text == ".image":
                     user_states[sid] = {"step": "image_upload", "data": {}}
                     send_fb_message(sid, "📸 أرسل الصورة التي تريد تحليلها:")
-                    continue
-
                 elif text == ".infos":
                     infos_msg = "📊 **قائمة المستخدمين:**\n\n"
                     for uid in all_users:
@@ -282,12 +247,22 @@ def webhook():
                     send_fb_message(sid, infos_msg[:2000]) 
                     user_states[sid] = {"step": "admin_action", "data": {}}
                     send_fb_message(sid, "⚙️ اختر الإجراء:\n1- رفع الحظر\n2- حظر مستخدم")
-                    continue
+                else:
+                    is_command = False
+                    
+                if is_command: continue
 
-                # --- الدردشة العادية ---
+                # 4. الدردشة العادية والمحقق
                 if text and not attachments:
+                    # التحقق من الشتائم فقط في الدردشة العادية لتخفيف العبء عن السيرفر
+                    if is_message_inappropriate(text):
+                        banned_users[sid] = f"تلفظ بكلمة نابية: {text[:50]}"
+                        cloud_data['banned_users_dict'] = banned_users; save_cloud_data(cloud_data)
+                        send_fb_message(sid, "🚫 تم حظرك بسبب الكلام النابي.")
+                        continue
+                        
                     ans, err = ask_copilot(text, web_search=False)
-                    send_fb_message(sid, ans if ans else f"❌ خطأ:\n{err}")
+                    send_fb_message(sid, ans if ans else f"❌ خطأ السيرفر:\n{err}")
                 elif attachments:
                     send_fb_message(sid, "يرجى استخدام أمر .image أولاً لتحليل الصورة.")
 
