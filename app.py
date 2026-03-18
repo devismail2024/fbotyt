@@ -76,7 +76,7 @@ def is_message_inappropriate(text):
 # 🧠 3. AI & Image Engines
 # ==========================================
 def ask_copilot(user_message, image_url=None, web_search=False):
-    system = "أنت ذكاء اصطناعي تم إستخدام الapi الخاص بك لبرمجة بوت فيسبوك ميسنجر من طرف المبرمج المشهور M Ismail Dev, أجب دائما باختصار دون كثرت الكلام وبأسلوب مرح "
+    system = "تصرف على طبيغتك"
     if not web_search: system += " لا تبحث في الويب."
     try:
         res = requests.get(TEXT_API, params={"text": f"{system} {user_message}", "imageUrl": image_url}, timeout=30)
