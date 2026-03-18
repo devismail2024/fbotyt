@@ -168,16 +168,32 @@ def webhook():
                         
                     elif step == "gen_size":
                         if text in SIZES:
-                            send_fb_message(sid, "🎨 جاري الإنشاء...")
-                            url, err = generate_image_sync(state["data"]["prompt"], state["data"]["style"], SIZES[text])
+                            send_fb_message(sid, "🎨 جاري الإنشاء... (قد يستغرق الأمر دقيقة)")
+                            
+                            # 🛡️ الدرع الواقي: حفظ البيانات وتغيير الحالة فوراً لمنع تكرار فيسبوك
+                            prompt = state["data"]["prompt"]
+                            style = state["data"]["style"]
+                            size = SIZES[text]
+                            user_states[sid] = {"step": "locked_processing"} # إغلاق الحالة
+                            
+                            url, err = generate_image_sync(prompt, style, size)
                             if url: send_fb_image(sid, url)
                             else: send_fb_message(sid, f"❌ خطأ: {err}")
-                            del user_states[sid]
+                            
+                            # تنظيف الحالة فقط إذا كانت لا تزال مغلقة
+                            if user_states.get(sid, {}).get("step") == "locked_processing":
+                                del user_states[sid]
                         else: send_fb_message(sid, "❌ الرجاء اختيار رقم صحيح من 1 إلى 3.")
                         
                     elif step == "web_query":
+                        send_fb_message(sid, "🔍 جاري البحث في الويب...")
+                        user_states[sid] = {"step": "locked_processing"} # إغلاق الحالة
+                        
                         ans, err = ask_copilot(text, web_search=True)
-                        send_fb_message(sid, ans if ans else f"❌ {err}"); del user_states[sid]
+                        send_fb_message(sid, ans if ans else f"❌ {err}")
+                        
+                        if user_states.get(sid, {}).get("step") == "locked_processing":
+                            del user_states[sid]
                         
                     elif step == "image_upload":
                         if attachments:
@@ -185,11 +201,21 @@ def webhook():
                             user_states[sid] = state; send_fb_message(sid, "✍️ أدخل طلبك للصورة (أو أرسل رقم 1 للتحليل العادي)")
                             
                     elif step == "image_prompt":
-                        send_fb_message(sid, " جاري المعالجة...")
+                        send_fb_message(sid, "👁️ جاري المعالجة...")
                         p = "تحليل الصورة" if text == "1" else text
-                        cat, _ = upload_to_catbox(state["data"]["url"])
+                        img_url = state["data"]["url"]
+                        user_states[sid] = {"step": "locked_processing"} # إغلاق الحالة
+                        
+                        cat, _ = upload_to_catbox(img_url)
                         ans, _ = ask_copilot(p, image_url=cat)
-                        send_fb_message(sid, ans); del user_states[sid]
+                        send_fb_message(sid, ans)
+                        
+                        if user_states.get(sid, {}).get("step") == "locked_processing":
+                            del user_states[sid]
+
+                    # 🛡️ تجاهل أي رسائل تأتي والمستخدم في حالة معالجة طويلة
+                    elif step == "locked_processing":
+                        continue
                         
                     elif step == "admin_action":
                         if text == "3": # فك الحظر عن الجميع
