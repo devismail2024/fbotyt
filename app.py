@@ -51,12 +51,14 @@ def save_cloud_data(data):
 # 🛑 2. Detective Engine (نسخة النينجا السريعة)
 # ==========================================
 def is_message_inappropriate(text):
-    """محقق الأخلاق المطور ليكون سريعاً ولا يعطل الأوامر"""
-    clean_text = text.strip()
+    """نسخة النينجا المحدثة لمنع التداخل مع الكلمات التقنية"""
+    clean_text = text.lower().strip()
     
+    # 🚀 فلاتر لمنع فحص الأوامر والكلمات التقنية المعروفة
+    tech_keywords = ["menu", "info", "gen", "web", "image", "status", "ping", "myid"]
     if clean_text.startswith("."): return False
-    if len(clean_text) <= 2: return False 
-    if clean_text.isdigit(): return False 
+    if clean_text in tech_keywords: return False # 👈 هذا السطر سيمنع حظر من يكتب menu بدون نقطة
+    if len(clean_text) <= 2 or clean_text.isdigit(): return False 
     
     instruction = f"أجب بـ YES فقط إذا كان هذا النص سب أو قذف صريح، وأجب بـ NO إذا كان كلام عادي أو مصطلح تقني. النص: '{clean_text}'"
     
