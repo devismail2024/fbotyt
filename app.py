@@ -75,14 +75,27 @@ def ask_copilot(user_message, image_url=None, web_search=False):
         return None, f"خطأ API: {res.status_code} - {res.text[:100]}"
     except Exception as e: return None, f"خطأ اتصال: {str(e)}"
 
-def generate_image_sync(prompt, style, size):
+def generate_image_sync(sid, prompt, style, size):
     params = {"txt": prompt, "style": style, "size": size}
     try:
         res = requests.get(IMAGE_GEN_API, params=params, timeout=45)
         if res.status_code == 200:
-            return res.json().get("data", {}).get("image_url"), None
-        return None, f"خطأ API: {res.status_code} - {res.text[:100]}"
-    except Exception as e: return None, f"خطأ اتصال: {str(e)}"
+            data = res.json()
+            raw_url = data.get("data", {}).get("image_url") # الرابط من صديقك 
+            
+            if raw_url:
+                # 🚀 الحيلة هنا: نرفع الرابط لـ Catbox أولاً لضمان وصوله لفيسبوك [cite: 42]
+                final_url, upload_err = upload_to_catbox(raw_url)
+                if final_url:
+                    return final_url, None
+                else:
+                    # إذا فشل Catbox، نجرب إرسال الرابط الأصلي كخيار أخير
+                    return raw_url, f"تم الإرسال بالرابط الأصلي (فشل الرفع الوسيط: {upload_err})"
+            
+            return None, f"الرابط غير موجود في رد الـ API: {str(data)[:100]}"
+        return None, f"خطأ API الصديق: {res.status_code}"
+    except Exception as e:
+        return None, f"خطأ اتصال: {str(e)}"
 
 def upload_to_catbox(image_url_fb):
     try:
