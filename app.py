@@ -50,16 +50,44 @@ def save_cloud_data(data):
 # ==========================================
 # 🧠 3. AI & Image Engines
 # ==========================================
+# ==========================================
+# 🛑 2. Detective Engine (نسخة الذكاء المنطقي)
+# ==========================================
 def is_message_inappropriate(text):
-    prompt = f"أجب بـ YES أو NO. هل هذا النص سب؟: '{text}'"
+    """محقق الأخلاق باستخدام هندسة التعليمات المتقدمة"""
+    
+    # 👈 القاعدة الذهبية: أي رسالة تبدأ بنقطة هي أمر وليست سباً
+    if text.startswith("."):
+        return False
+
+    # 👈 التعليمات الجديدة: تجعل المحقق يركز فقط على القذف الصريح
+    instruction = (
+        "أنت خبير لغوي في اللهجات العربية والمغربية والانجليزية وأي لغة أخرى. "
+        "مهمتك: تصنيف النص هل هو (سب وشتم قبيح) أم (كلام عادي/تقني). "
+        "قواعد صارمة: "
+        "1- الكلمات التقنية مثل (سيو، SEO، ماركتينج، كود) هي كلام عادي. "
+        "2- الكلمات التي تبدو غريبة أو غير مفهومة هي كلام عادي. "
+        "3- الأوامر الموجهة للبوت هي كلام عادي. "
+        "4- فقط القذف الصريح أو الشتم المباشر هو ما نعتبره YES. "
+        "أجب بكلمة واحدة فقط: YES أو NO. "
+        f"النص المطلوب فحصه: '{text}'"
+    )
+    
     try:
-        res = requests.get(TEXT_API, params={"text": prompt}, timeout=10)
-        return "YES" in res.json().get("answer", "").upper()
-    except: return False
+        # استخدام الـ API الخاص بصديقك للفحص
+        res = requests.get(TEXT_API, params={"text": instruction}, timeout=12)
+        if res.status_code == 200:
+            answer = res.json().get("answer", "").upper()
+            # التأكد من أن الإجابة هي YES فقط وبدون أي جمل أخرى لضمان الدقة
+            if "YES" in answer and len(answer) < 5: 
+                return True
+    except: 
+        pass # في حالة وقوع خطأ في سيرفر الفحص، نمرر الرسالة ولا نحظر المستخدم
+    return False
 
 def ask_copilot(user_message, image_url=None, web_search=False):
     # 👈 تم تعديل شخصية الذكاء ليعترف بأنك من قمت بدمجه وبرمجته في فيسبوك
-    system = "أنت ذكاء اصطناعي متطور. المطور 'M Ismail Dev' يستخدم الـ API الخاص بك وقام ببرمجتك لتشغيلك كبوت ذكي ومساعد على منصة فيسبوك ماسنجر. أجب بلباقة وساعد المستخدمين."
+    system = "أنت ذكاء اصطناعي تم إستخدام الapi الخاص بك لبرمجة بوت فيسبوك ميسنجر من طرف المبرمج المشهور M Ismail Dev, أجب دائما باختصار دون كثرت الكلام وبأسلوب مرح "
     if not web_search: system += " لا تبحث في الويب."
     try:
         res = requests.get(TEXT_API, params={"text": f"{system} {user_message}", "imageUrl": image_url}, timeout=30)
@@ -163,7 +191,7 @@ def webhook():
                             user_states[sid] = state; send_fb_message(sid, "✍️ أدخل طلبك للصورة (أو أرسل رقم 1 للتحليل العادي)")
                             
                     elif step == "image_prompt":
-                        send_fb_message(sid, "👁️ جاري المعالجة...")
+                        send_fb_message(sid, " جاري المعالجة...")
                         p = "تحليل الصورة" if text == "1" else text
                         cat, _ = upload_to_catbox(state["data"]["url"])
                         ans, _ = ask_copilot(p, image_url=cat)
