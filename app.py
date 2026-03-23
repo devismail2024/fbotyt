@@ -75,8 +75,8 @@ def is_message_inappropriate(text):
 # 🧠 4. AI & Image Engines
 # ==========================================
 def ask_copilot(user_message, image_url=None, web_search=False):
-    system = "تصرف على طبيعتك"
-    if not web_search: system += " لا تبحث في الويب."
+    system = ""
+    if not web_search: system += ""
     try:
         res = requests.get(TEXT_API, params={"text": f"{system} {user_message}", "imageUrl": image_url}, timeout=30)
         return res.json().get("answer", "عذرا، وقع خطأ."), None
