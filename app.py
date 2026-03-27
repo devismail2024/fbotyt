@@ -9,7 +9,7 @@ app = Flask(__name__)
 # ==========================================
 # ⚙️ 1. Configuration & Global States
 # ==========================================
-PAGE_ACCESS_TOKEN = "EAAg9vun0ll4BQ6kUjTMs3qKk2CmjsfbaW5CQd9GWtbxKHWQk8ZAU1j3jWNsR7DME9gNMpl773NffjPyvmCaVT3WCdhanc2qZBhyPdDKozHrGDrkxQJHNI4Wq8mV5i9Kc13ISBNHf4ZBdY071PnSpf2c4KHOJGUyx9RZCazZBsXDvewxrHb8dHA7wYA44s9fWZBltTtsAZDZD"
+PAGE_ACCESS_TOKEN = "EAAg9vun0ll4BRHDCZCuLWuZBGJ4wupUj5O4x8nZAaI51XCnXZCETTazN7JXVrZA7HJhHWxjNSkg8lvZAw2NswmibEShdeshrZByzkYcZAczM41XR4ZA2O9ib5DjUtqvOTKZBrkL2JBcDrvRVYCMMTz0wVgSxn4Dm6kQxnR88BiqCr9J2CeMV4370APs3ikoBZA3nVGMrA9kEAZDZD"
 VERIFY_TOKEN = "ismail dev"
 FB_API_URL = "https://graph.facebook.com/v19.0/me/messages"
 
