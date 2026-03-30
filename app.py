@@ -2,6 +2,9 @@ import os
 import time
 import random
 import requests
+import json
+import firebase_admin
+from firebase_admin import credentials, db
 from flask import Flask, request
 
 app = Flask(__name__)
@@ -15,40 +18,48 @@ FB_API_URL = "https://graph.facebook.com/v19.0/me/messages"
 
 ADMIN_ID = "25630836599928130" 
 
-JSONBIN_API_KEY = os.environ.get("JSONBIN_API_KEY")
-JSONBIN_BIN_ID = os.environ.get("JSONBIN_BIN_ID")
-JSONBIN_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}" if JSONBIN_BIN_ID else ""
-
 TEXT_API = "https://obito-mr-apis-2.vercel.app/api/ai/copilot"
 IMAGE_GEN_API = "https://obito-mr-apis.vercel.app/api/ai/deepImg"
-
-user_states = {} 
-user_cooldowns = {}
-COOLDOWN_SECONDS = 1
 
 STYLES = {"1": "default", "2": "ghibli", "3": "cyberpunk", "4": "anime", "5": "portrait", "6": "chibi", "7": "pixel", "8": "oil", "9": "3d"}
 SIZES = {"1": "1:1", "2": "3:2", "3": "2:3"}
 
 # ==========================================
-# ☁️ 2. Cloud Storage
+# 🔥 2. Firebase Cloud Storage
 # ==========================================
+firebase_creds_json = os.environ.get('FIREBASE_CREDENTIALS')
+
+if firebase_creds_json and not firebase_admin._apps:
+    try:
+        cred_dict = json.loads(firebase_creds_json)
+        cred = credentials.Certificate(cred_dict)
+        firebase_admin.initialize_app(cred, {
+            'databaseURL': os.environ.get('FIREBASE_DB_URL', 'https://your-project-id.firebaseio.com/') 
+        })
+    except Exception as e:
+        print(f"Failed to initialize Firebase: {e}")
+
 def load_cloud_data():
     default_data = {"banned_users_dict": {}, "active_unban_codes": [], "all_users": [], "users_profiles": {}}
-    if not JSONBIN_URL: return default_data
+    if not firebase_admin._apps: return default_data
     try:
-        res = requests.get(JSONBIN_URL, headers={"X-Master-Key": JSONBIN_API_KEY})
-        if res.status_code == 200:
-            data = res.json()['record']
+        ref = db.reference('maghrib_ai_bot_data') 
+        data = ref.get()
+        if data:
             if "all_users" not in data: data["all_users"] = []
             if "banned_users_dict" not in data: data["banned_users_dict"] = {}
             if "users_profiles" not in data: data["users_profiles"] = {}
+            if "active_unban_codes" not in data: data["active_unban_codes"] = []
             return data
-    except: pass
+    except Exception as e: pass
     return default_data
 
 def save_cloud_data(data):
-    if not JSONBIN_URL: return
-    requests.put(JSONBIN_URL, json=data, headers={"Content-Type": "application/json", "X-Master-Key": JSONBIN_API_KEY})
+    if not firebase_admin._apps: return
+    try:
+        ref = db.reference('maghrib_ai_bot_data')
+        ref.set(data)
+    except Exception as e: pass
 
 # ==========================================
 # 🛑 3. Detective Engine
@@ -75,7 +86,6 @@ def is_message_inappropriate(text):
 # ==========================================
 def ask_copilot(user_message, image_url=None, web_search=False):
     system = ""
-    if not web_search: system += ""
     try:
         res = requests.get(TEXT_API, params={"text": f"{system} {user_message}", "imageUrl": image_url}, timeout=30)
         return res.json().get("answer", "عذرا، وقع خطأ."), None
@@ -87,19 +97,10 @@ def generate_image_sync(prompt, style, size):
         res = requests.get(IMAGE_GEN_API, params=params, timeout=45)
         if res.status_code == 200:
             raw_url = res.json().get("data", {}).get("image_url")
+            # إرسال الرابط المباشر
             if raw_url:
-                final_url, _ = upload_to_catbox(raw_url)
-                return final_url if final_url else raw_url, None
+                return raw_url, None
         return None, f"API Error: {res.status_code}"
-    except Exception as e: return None, str(e)
-
-def upload_to_catbox(image_url):
-    try:
-        img_data = requests.get(image_url).content
-        res = requests.post("https://catbox.moe/user/api.php", 
-                            data={"reqtype": "fileupload", "userhash": ""}, 
-                            files={"fileToUpload": ("image.jpg", img_data, "image/jpeg")})
-        return res.text.strip(), None
     except Exception as e: return None, str(e)
 
 # ==========================================
@@ -113,6 +114,7 @@ def webhook():
     data = request.get_json()
     if data.get('object') == 'page':
         cloud_data = load_cloud_data()
+        
         all_users = set(cloud_data.get('all_users', []))
         banned_users = cloud_data.get('banned_users_dict', {})
         active_codes = set(cloud_data.get('active_unban_codes', []))
@@ -125,6 +127,9 @@ def webhook():
                 msg = event.get('message', {})
                 text = msg.get('text', '').strip()
                 attachments = msg.get('attachments', [])
+                
+                # 🚀 استخراج المعرف الفريد للرسالة
+                mid = msg.get('mid')
 
                 if not text and not attachments: continue
 
@@ -156,13 +161,26 @@ def webhook():
                     continue
 
                 # ==========================================
-                # 💸 نظام الرصيد والاشتراكات
+                # 💸 نظام الرصيد والاشتراكات والذاكرة
                 # ==========================================
                 if sid not in profiles:
-                    profiles[sid] = {"msgs": 20, "reset_time": time.time(), "sub_end": 0}
+                    profiles[sid] = {"msgs": 20, "reset_time": time.time(), "sub_end": 0, "state": {}, "last_mid": ""}
                     db_changed = True
 
                 user_profile = profiles[sid]
+                
+                # التأكد من التحديث للحسابات القديمة
+                if "state" not in user_profile: user_profile["state"] = {}; db_changed = True
+                if "last_mid" not in user_profile: user_profile["last_mid"] = ""; db_changed = True
+
+                # 🚀 صمام الأمان ضد تكرار فيسبوك المزعج
+                if mid and user_profile["last_mid"] == mid:
+                    continue # تجاهل الرسالة المكررة تماماً
+                
+                if mid:
+                    user_profile["last_mid"] = mid
+                    db_changed = True
+
                 current_time = time.time()
 
                 # إعادة العداد بعد 24 ساعة
@@ -174,69 +192,78 @@ def webhook():
                 is_admin = (sid == ADMIN_ID)
                 is_subbed = (user_profile["sub_end"] > current_time)
 
-                # صمام الأمان (منع الرسائل إذا انتهى الرصيد)
+                # صمام الأمان للرصيد
                 if not is_admin and not is_subbed and text != ".myid" and not text.startswith(".subs123"):
                     if user_profile["msgs"] <= 0:
                         limit_msg = (
-                            "🚫 **عفواً!** لقد وصلت إلى الحد اليومي المسموح به من الرسائل في التجربة المجانية للبوت.\n\n"
-                            "⏳ يرجى العودة بعد 24 ساعة للحصول على رصيد رسائل جديد لتكملة محادثتنا.\n\n"
+                            "🚫 **عفواً!** لقد وصلت إلى الحد اليومي المسموح به من الرسائل.\n\n"
+                            "⏳ يرجى العودة بعد 24 ساعة للحصول على رصيد جديد.\n\n"
                             "👑 **تريد التحدث بدون حدود؟**\n"
-                            "تواصل مع المطور مباشرة لترقية حسابك:\n"
-                            "🔗 https://www.facebook.com/M.oulay.I.smail.B.drk\n\n"
-                            "💎 **باقات الإشتراك المميزة (VIP):**\n"
-                            "🪙 1 دولار / للأسبوع\n"
-                            "💰 3 دولار / للشهر"
+                            "تواصل مع المطور لترقية حسابك:\n"
+                            "🔗 https://www.facebook.com/M.oulay.I.smail.B.drk"
                         )
                         send_fb_message(sid, limit_msg)
-                        continue # يمنع البوت من تنفيذ أي كود أسفل هذا السطر
+                        continue 
                     else:
                         user_profile["msgs"] -= 1
                         db_changed = True
 
+                # قراءة الذاكرة من فايربيز
+                state = user_profile["state"]
+                step = state.get("step")
+
                 # ==========================================
                 # 🧠 معالجة الحالات والأوامر
                 # ==========================================
-                state = user_states.get(sid, {})
-                step = state.get("step")
-
                 if step:
                     if step == "broadcast_wait":
+                        # 🚀 إصلاح ثغرة تكرار البث: نمسح الحالة ونحفظ في القاعدة "قبل" أن نبدأ في البث
+                        user_profile["state"] = {}
+                        cloud_data['users_profiles'] = profiles
+                        save_cloud_data(cloud_data) 
+                        db_changed = False # لكي لا يحفظ مرة أخرى في الأسفل
+                        
+                        send_fb_message(sid, "⏳ جاري إرسال البث... (قد يستغرق بعض الوقت)")
+                        success_count = 0
                         for uid in all_users:
-                            if uid != sid: send_fb_message(uid, text); time.sleep(0.3)
-                        send_fb_message(sid, "✅ تم البث.")
-                        del user_states[sid]
+                            if uid != sid: 
+                                try:
+                                    send_fb_message(uid, text)
+                                    success_count += 1
+                                    time.sleep(0.05) # تقليل مدة النوم لتجنب غضب سيرفر Vercel
+                                except: pass
+                        send_fb_message(sid, f"✅ تم البث بنجاح لـ {success_count} مستخدم.")
                         
                     elif step == "admin_subs_id":
                         target_id = text.strip()
                         state.update({"step": "admin_subs_type", "data": {"target_id": target_id}})
-                        user_states[sid] = state
+                        user_profile["state"] = state; db_changed = True
                         send_fb_message(sid, "أدخل نوع الاشتراك الذي تريد تطبيقه للمستخدم :\n1- باقة أسبوعية\n2- باقة شهرية")
                         
                     elif step == "admin_subs_type":
                         target_id = state["data"]["target_id"]
                         if target_id not in profiles:
-                            profiles[target_id] = {"msgs": 20, "reset_time": time.time(), "sub_end": 0}
+                            profiles[target_id] = {"msgs": 20, "reset_time": time.time(), "sub_end": 0, "state": {}, "last_mid": ""}
                             
                         if text == "1":
-                            profiles[target_id]["sub_end"] = time.time() + (7 * 86400) # 7 أيام بالثواني
+                            profiles[target_id]["sub_end"] = time.time() + (7 * 86400)
                             pack_name = "الباقة الأسبوعية"
                         elif text == "2":
-                            profiles[target_id]["sub_end"] = time.time() + (30 * 86400) # 30 يوم بالثواني
+                            profiles[target_id]["sub_end"] = time.time() + (30 * 86400)
                             pack_name = "الباقة الشهرية"
                         else:
                             send_fb_message(sid, "❌ خيار غير صحيح. تم الإلغاء.")
-                            del user_states[sid]
+                            user_profile["state"] = {}; db_changed = True
                             continue
                             
-                        db_changed = True
+                        user_profile["state"] = {}; db_changed = True
                         send_fb_message(sid, f"✅ تم تفعيل {pack_name} للمستخدم {target_id} بنجاح.")
                         send_fb_message(target_id, f"🎉 **مبارك!**\nتم تفعيل {pack_name} (VIP) في حسابك بنجاح.\nيمكنك الآن استخدام البوت بدون أي حدود! 🚀")
-                        del user_states[sid]
 
                     elif step == "gen_style":
                         if text in STYLES:
                             state.update({"step": "gen_size", "data": {**state["data"], "style": STYLES[text]}})
-                            user_states[sid] = state
+                            user_profile["state"] = state; db_changed = True
                             send_fb_message(sid, "📐 **أدخل رقم البعد الذي تريده:**\n\n1- مربع (1:1)\n2- أفقي (3:2)\n3- عمودي (2:3)")
                         else: send_fb_message(sid, "❌ الرجاء اختيار رقم صحيح من 1 إلى 9.")
                         
@@ -246,39 +273,30 @@ def webhook():
                             url, err = generate_image_sync(state["data"]["prompt"], state["data"]["style"], SIZES[text])
                             if url: send_fb_image(sid, url)
                             else: send_fb_message(sid, f"❌ خطأ: {err}")
-                            del user_states[sid]
+                            user_profile["state"] = {}; db_changed = True
                         else: send_fb_message(sid, "❌ الرجاء اختيار رقم صحيح من 1 إلى 3.")
                         
                     elif step == "web_query":
                         send_fb_message(sid, "🔍 جاري البحث في الويب...")
                         ans, err = ask_copilot(text, web_search=True)
                         send_fb_message(sid, ans if ans else f"❌ {err}")
-                        del user_states[sid]
-                        
-                    # تم تعطيل خطوات رفع وتحليل الصورة
-                    # elif step == "image_upload": ...
-                    # elif step == "image_prompt": ...
+                        user_profile["state"] = {}; db_changed = True
 
-                    elif step == "locked_processing":
-                        continue
-                        
                     elif step == "admin_action":
                         if text == "3": 
                             banned_users.clear()
                             cloud_data['banned_users_dict'] = banned_users
-                            db_changed = True
+                            user_profile["state"] = {}; db_changed = True
                             send_fb_message(sid, "✅ تم فك الحظر عن جميع المستخدمين.")
-                            del user_states[sid]
                         elif text == "4": 
                             for u in all_users: 
                                 if u != sid: banned_users[u] = "حظر جماعي"
                             cloud_data['banned_users_dict'] = banned_users
-                            db_changed = True
+                            user_profile["state"] = {}; db_changed = True
                             send_fb_message(sid, "🚫 تم حظر جميع المستخدمين.")
-                            del user_states[sid]
                         elif text in ["1", "2"]:
                             state.update({"step": "admin_target", "data": {**state["data"], "act": text}})
-                            user_states[sid] = state
+                            user_profile["state"] = state; db_changed = True
                             send_fb_message(sid, "✍️ أدخل **رقم المستخدم** من اللائحة أعلاه (مثال: 1, 2, 3...):")
                         else:
                             send_fb_message(sid, "❌ اختر رقماً صحيحاً من 1 إلى 4.")
@@ -287,13 +305,12 @@ def webhook():
                         target_id = state["data"]["map"].get(text)
                         if not target_id:
                             send_fb_message(sid, "❌ رقم غير موجود في اللائحة. تم إلغاء الأمر.")
-                            del user_states[sid]; continue
+                            user_profile["state"] = {}; db_changed = True; continue
                             
                         if state["data"]["act"] == "1":
                             if target_id in banned_users:
                                 del banned_users[target_id]
                                 cloud_data['banned_users_dict'] = banned_users
-                                db_changed = True
                                 send_fb_message(sid, f"✅ تم فك الحظر عن المستخدم رقم {text}.")
                             else: send_fb_message(sid, "❌ هذا المستخدم ليس محظوراً.")
                         elif state["data"]["act"] == "2":
@@ -301,20 +318,24 @@ def webhook():
                             else:
                                 banned_users[target_id] = "حظر يدوي"
                                 cloud_data['banned_users_dict'] = banned_users
-                                db_changed = True
                                 send_fb_message(sid, f"🚫 تم حظر المستخدم رقم {text}.")
-                        del user_states[sid]
+                        user_profile["state"] = {}; db_changed = True
                     continue
 
                 # ==========================================
                 # 🛠️ توجيه الأوامر المباشرة
                 # ==========================================
                 if text == "brosys123": 
-                    user_states[sid] = {"step": "broadcast_wait"}; send_fb_message(sid, "📢 رسالة البث؟")
+                    # 🚀 حماية أمنية لأمر البث
+                    if is_admin:
+                        user_profile["state"] = {"step": "broadcast_wait"}; db_changed = True
+                        send_fb_message(sid, "📢 أرسل رسالة البث الآن:")
+                    else:
+                        send_fb_message(sid, "❌ أمر غير معروف. استخدم .menu لرؤية الأوامر المتاحة.")
                 
                 elif text == ".subs123":
                     if is_admin:
-                        user_states[sid] = {"step": "admin_subs_id"}
+                        user_profile["state"] = {"step": "admin_subs_id"}; db_changed = True
                         send_fb_message(sid, "أدخل الID الخاص بالمستخدم :")
                     else:
                         send_fb_message(sid, "❌ أمر غير معروف. استخدم .menu لرؤية الأوامر المتاحة.")
@@ -333,7 +354,7 @@ def webhook():
                 elif text == ".status":
                     total = len(all_users)
                     banned = len(banned_users)
-                    status_msg = f"📊 **تقرير حالة النظام:**\n\n👥 إجمالي المستخدمين: {total}\n✅ النشطين: {total - banned}\n🚫 المحظورين: {banned}\n\n⚡ **حالة الخوادم:**\n🟢 خادم النظام (Vercel): مستقر\n🟢 خادم الذكاء الاصطناعي: متصل"
+                    status_msg = f"📊 **تقرير حالة النظام:**\n\n👥 إجمالي المستخدمين: {total}\n✅ النشطين: {total - banned}\n🚫 المحظورين: {banned}\n\n⚡ **حالة الخوادم:**\n🟢 خادم النظام (Vercel): مستقر\n🟢 قاعدة البيانات (Firebase): متصل"
                     send_fb_message(sid, status_msg)
 
                 elif text.startswith(".web"):
@@ -342,31 +363,34 @@ def webhook():
                         ans, _ = ask_copilot(q, web_search=True)
                         send_fb_message(sid, ans)
                     else: 
-                        user_states[sid] = {"step": "web_query"}
+                        user_profile["state"] = {"step": "web_query"}; db_changed = True
                         send_fb_message(sid, "ماذا تريد أن تبحث عنه؟")
                         
                 elif text.startswith(".gen"):
                     p = text.replace(".gen", "").strip() or "صورة إبداعية عشوائية"
-                    user_states[sid] = {"step": "gen_style", "data": {"prompt": p}}
+                    user_profile["state"] = {"step": "gen_style", "data": {"prompt": p}}; db_changed = True
                     send_fb_message(sid, "🎨 **أدخل رقم الستايل الذي تريده:**\n\n1- الواقعية (Default)\n2- فن غيبلي (Ghibli)\n3- سايبربانك (Cyberpunk)\n4- أنمي (Anime)\n5- بورتريه (Portrait)\n6- تشيبي (Chibi)\n7- فن البكسل (Pixel)\n8- الرسم الزيتي (Oil)\n9- ثلاثي الأبعاد (3D)")
                     
-                # 🛑 الرسالة التنبيهية عند استخدام أمر .image
+                # 🛑 رسالة الصيانة لأمر تحليل الصور
                 elif text == ".image": 
                     maintenance_msg = "🛠️ **عذراً! ميزة تحليل الصور قيد التحديث والإصلاح حالياً.**\n\nنحن نعمل على تطويرها لتصبح أسرع وأكثر دقة. يرجى المحاولة لاحقاً، شكراً لتفهمكم! 🙏"
                     send_fb_message(sid, maintenance_msg)
                 
                 elif text == ".infos22":
-                    mapping = {}
-                    infos_msg = "📊 **قائمة المستخدمين:**\n\n"
-                    for i, uid in enumerate(all_users, 1):
-                        mapping[str(i)] = uid
-                        status = "🚫 محظور" if uid in banned_users else "✅ نشط" 
-                        infos_msg += f"{i}- ID: {uid} | {status}\n"
-                    send_fb_message(sid, infos_msg[:2000]) 
-                    user_states[sid] = {"step": "admin_action", "data": {"map": mapping}}
-                    send_fb_message(sid, "⚙️ **اختر الإجراء:**\n\n1- رفع الحظر\n2- حظر\n3- رفع الحظر عن الجميع\n4- حظر الجميع")
+                    # 🚀 حماية أمنية لأمر الإدارة
+                    if is_admin:
+                        mapping = {}
+                        infos_msg = "📊 **قائمة المستخدمين:**\n\n"
+                        for i, uid in enumerate(all_users, 1):
+                            mapping[str(i)] = uid
+                            status = "🚫 محظور" if uid in banned_users else "✅ نشط" 
+                            infos_msg += f"{i}- ID: {uid} | {status}\n"
+                        send_fb_message(sid, infos_msg[:2000]) 
+                        user_profile["state"] = {"step": "admin_action", "data": {"map": mapping}}; db_changed = True
+                        send_fb_message(sid, "⚙️ **اختر الإجراء:**\n\n1- رفع الحظر\n2- حظر\n3- رفع الحظر عن الجميع\n4- حظر الجميع")
+                    else:
+                        send_fb_message(sid, "❌ أمر غير معروف. استخدم .menu لرؤية الأوامر المتاحة.")
                 
-                # منع إرسال الأوامر الوهمية (التي تبدأ بنقطة) للذكاء الاصطناعي
                 elif text.startswith("."):
                     send_fb_message(sid, "❌ أمر غير معروف. استخدم .menu لرؤية الأوامر المتاحة.")
 
@@ -382,6 +406,9 @@ def webhook():
                     send_fb_message(sid, ans)
 
         if db_changed:
+            cloud_data['all_users'] = list(all_users)
+            cloud_data['banned_users_dict'] = banned_users
+            cloud_data['active_unban_codes'] = list(active_codes)
             cloud_data['users_profiles'] = profiles
             save_cloud_data(cloud_data)
 
