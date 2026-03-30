@@ -1,6 +1,0 @@
-flask
-requests
-cloudinary
-google.genai
-google-genai
-firebase-admin
