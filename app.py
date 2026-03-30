@@ -16,6 +16,7 @@ PAGE_ACCESS_TOKEN = "EAAg9vun0ll4BRHDCZCuLWuZBGJ4wupUj5O4x8nZAaI51XCnXZCETTazN7J
 VERIFY_TOKEN = "ismail dev"
 FB_API_URL = "https://graph.facebook.com/v19.0/me/messages"
 
+# تأكد أن هذا هو الـ ID الخاص بك فعلاً!
 ADMIN_ID = "25630836599928130" 
 
 TEXT_API = "https://obito-mr-apis-2.vercel.app/api/ai/copilot"
@@ -97,7 +98,6 @@ def generate_image_sync(prompt, style, size):
         res = requests.get(IMAGE_GEN_API, params=params, timeout=45)
         if res.status_code == 200:
             raw_url = res.json().get("data", {}).get("image_url")
-            # إرسال الرابط المباشر
             if raw_url:
                 return raw_url, None
         return None, f"API Error: {res.status_code}"
@@ -128,12 +128,10 @@ def webhook():
                 text = msg.get('text', '').strip()
                 attachments = msg.get('attachments', [])
                 
-                # 🚀 استخراج المعرف الفريد للرسالة
                 mid = msg.get('mid')
 
                 if not text and not attachments: continue
 
-                # إضافة مستخدم جديد
                 if sid not in all_users:
                     all_users.add(sid)
                     cloud_data['all_users'] = list(all_users)
@@ -169,13 +167,12 @@ def webhook():
 
                 user_profile = profiles[sid]
                 
-                # التأكد من التحديث للحسابات القديمة
                 if "state" not in user_profile: user_profile["state"] = {}; db_changed = True
                 if "last_mid" not in user_profile: user_profile["last_mid"] = ""; db_changed = True
 
                 # 🚀 صمام الأمان ضد تكرار فيسبوك المزعج
                 if mid and user_profile["last_mid"] == mid:
-                    continue # تجاهل الرسالة المكررة تماماً
+                    continue 
                 
                 if mid:
                     user_profile["last_mid"] = mid
@@ -183,7 +180,6 @@ def webhook():
 
                 current_time = time.time()
 
-                # إعادة العداد بعد 24 ساعة
                 if current_time - user_profile["reset_time"] >= 86400:
                     user_profile["msgs"] = 20
                     user_profile["reset_time"] = current_time
@@ -192,7 +188,6 @@ def webhook():
                 is_admin = (sid == ADMIN_ID)
                 is_subbed = (user_profile["sub_end"] > current_time)
 
-                # صمام الأمان للرصيد
                 if not is_admin and not is_subbed and text != ".myid" and not text.startswith(".subs123"):
                     if user_profile["msgs"] <= 0:
                         limit_msg = (
@@ -208,20 +203,25 @@ def webhook():
                         user_profile["msgs"] -= 1
                         db_changed = True
 
-                # قراءة الذاكرة من فايربيز
                 state = user_profile["state"]
                 step = state.get("step")
+
+                # 🚀 تفريغ "الحالة الشبح" للخطوات المحذوفة
+                valid_steps = ["broadcast_wait", "admin_subs_id", "admin_subs_type", "gen_style", "gen_size", "web_query", "admin_action", "admin_target"]
+                if step and step not in valid_steps:
+                    user_profile["state"] = {}
+                    db_changed = True
+                    step = None 
 
                 # ==========================================
                 # 🧠 معالجة الحالات والأوامر
                 # ==========================================
                 if step:
                     if step == "broadcast_wait":
-                        # 🚀 إصلاح ثغرة تكرار البث: نمسح الحالة ونحفظ في القاعدة "قبل" أن نبدأ في البث
                         user_profile["state"] = {}
                         cloud_data['users_profiles'] = profiles
                         save_cloud_data(cloud_data) 
-                        db_changed = False # لكي لا يحفظ مرة أخرى في الأسفل
+                        db_changed = False 
                         
                         send_fb_message(sid, "⏳ جاري إرسال البث... (قد يستغرق بعض الوقت)")
                         success_count = 0
@@ -230,7 +230,7 @@ def webhook():
                                 try:
                                     send_fb_message(uid, text)
                                     success_count += 1
-                                    time.sleep(0.05) # تقليل مدة النوم لتجنب غضب سيرفر Vercel
+                                    time.sleep(0.05) 
                                 except: pass
                         send_fb_message(sid, f"✅ تم البث بنجاح لـ {success_count} مستخدم.")
                         
@@ -311,6 +311,7 @@ def webhook():
                             if target_id in banned_users:
                                 del banned_users[target_id]
                                 cloud_data['banned_users_dict'] = banned_users
+                                db_changed = True
                                 send_fb_message(sid, f"✅ تم فك الحظر عن المستخدم رقم {text}.")
                             else: send_fb_message(sid, "❌ هذا المستخدم ليس محظوراً.")
                         elif state["data"]["act"] == "2":
@@ -318,15 +319,16 @@ def webhook():
                             else:
                                 banned_users[target_id] = "حظر يدوي"
                                 cloud_data['banned_users_dict'] = banned_users
+                                db_changed = True
                                 send_fb_message(sid, f"🚫 تم حظر المستخدم رقم {text}.")
                         user_profile["state"] = {}; db_changed = True
+                    
                     continue
 
                 # ==========================================
                 # 🛠️ توجيه الأوامر المباشرة
                 # ==========================================
                 if text == "brosys123": 
-                    # 🚀 حماية أمنية لأمر البث
                     if is_admin:
                         user_profile["state"] = {"step": "broadcast_wait"}; db_changed = True
                         send_fb_message(sid, "📢 أرسل رسالة البث الآن:")
@@ -371,13 +373,11 @@ def webhook():
                     user_profile["state"] = {"step": "gen_style", "data": {"prompt": p}}; db_changed = True
                     send_fb_message(sid, "🎨 **أدخل رقم الستايل الذي تريده:**\n\n1- الواقعية (Default)\n2- فن غيبلي (Ghibli)\n3- سايبربانك (Cyberpunk)\n4- أنمي (Anime)\n5- بورتريه (Portrait)\n6- تشيبي (Chibi)\n7- فن البكسل (Pixel)\n8- الرسم الزيتي (Oil)\n9- ثلاثي الأبعاد (3D)")
                     
-                # 🛑 رسالة الصيانة لأمر تحليل الصور
                 elif text == ".image": 
                     maintenance_msg = "🛠️ **عذراً! ميزة تحليل الصور قيد التحديث والإصلاح حالياً.**\n\nنحن نعمل على تطويرها لتصبح أسرع وأكثر دقة. يرجى المحاولة لاحقاً، شكراً لتفهمكم! 🙏"
                     send_fb_message(sid, maintenance_msg)
                 
                 elif text == ".infos22":
-                    # 🚀 حماية أمنية لأمر الإدارة
                     if is_admin:
                         mapping = {}
                         infos_msg = "📊 **قائمة المستخدمين:**\n\n"
