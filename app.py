@@ -2,6 +2,9 @@ import os
 import time
 import random
 import requests
+import json
+import firebase_admin
+from firebase_admin import credentials, db
 from flask import Flask, request
 
 app = Flask(__name__)
@@ -16,10 +19,6 @@ FB_API_URL = "https://graph.facebook.com/v19.0/me/messages"
 # ⚠️⚠️ هام جداً: ضع المعرف الخاص بك هنا (يمكنك معرفته بكتابة .myid في البوت) ⚠️⚠️
 ADMIN_ID = "25630836599928130" 
 
-JSONBIN_API_KEY = os.environ.get("JSONBIN_API_KEY")
-JSONBIN_BIN_ID = os.environ.get("JSONBIN_BIN_ID")
-JSONBIN_URL = f"https://api.jsonbin.io/v3/b/{JSONBIN_BIN_ID}" if JSONBIN_BIN_ID else ""
-
 TEXT_API = "https://obito-mr-apis-2.vercel.app/api/ai/copilot"
 IMAGE_GEN_API = "https://obito-mr-apis.vercel.app/api/ai/deepImg"
 
@@ -31,25 +30,47 @@ STYLES = {"1": "default", "2": "ghibli", "3": "cyberpunk", "4": "anime", "5": "p
 SIZES = {"1": "1:1", "2": "3:2", "3": "2:3"}
 
 # ==========================================
-# ☁️ 2. Cloud Storage
+# 🔥 2. Firebase Cloud Storage (NEW ENGINE)
 # ==========================================
+# جلب بيانات الاعتماد من Vercel بشكل آمن
+firebase_creds_json = os.environ.get('FIREBASE_CREDENTIALS')
+
+# التأكد من تهيئة فايربيز مرة واحدة فقط لتجنب أخطاء إعادة التشغيل
+if firebase_creds_json and not firebase_admin._apps:
+    try:
+        cred_dict = json.loads(firebase_creds_json)
+        cred = credentials.Certificate(cred_dict)
+        firebase_admin.initialize_app(cred, {
+            # ضع رابط قاعدة البيانات الخاص بك هنا
+            'databaseURL': os.environ.get('FIREBASE_DB_URL', 'https://your-project-id.firebaseio.com/') 
+        })
+        print("Firebase initialized successfully!")
+    except Exception as e:
+        print(f"Failed to initialize Firebase: {e}")
+
 def load_cloud_data():
     default_data = {"banned_users_dict": {}, "active_unban_codes": [], "all_users": [], "users_profiles": {}}
-    if not JSONBIN_URL: return default_data
+    if not firebase_admin._apps: return default_data
     try:
-        res = requests.get(JSONBIN_URL, headers={"X-Master-Key": JSONBIN_API_KEY})
-        if res.status_code == 200:
-            data = res.json()['record']
+        ref = db.reference('maghrib_ai_bot_data') # عقدة البوت الشامل
+        data = ref.get()
+        if data:
             if "all_users" not in data: data["all_users"] = []
             if "banned_users_dict" not in data: data["banned_users_dict"] = {}
             if "users_profiles" not in data: data["users_profiles"] = {}
+            if "active_unban_codes" not in data: data["active_unban_codes"] = []
             return data
-    except: pass
+    except Exception as e:
+        print(f"Error loading from Firebase: {e}")
     return default_data
 
 def save_cloud_data(data):
-    if not JSONBIN_URL: return
-    requests.put(JSONBIN_URL, json=data, headers={"Content-Type": "application/json", "X-Master-Key": JSONBIN_API_KEY})
+    if not firebase_admin._apps: return
+    try:
+        ref = db.reference('maghrib_ai_bot_data')
+        ref.set(data)
+    except Exception as e:
+        print(f"Error saving to Firebase: {e}")
 
 # ==========================================
 # 🛑 3. Detective Engine
@@ -114,6 +135,8 @@ def webhook():
     data = request.get_json()
     if data.get('object') == 'page':
         cloud_data = load_cloud_data()
+        
+        # تحويل القوائم إلى مجموعات (Sets) لتسهيل البحث
         all_users = set(cloud_data.get('all_users', []))
         banned_users = cloud_data.get('banned_users_dict', {})
         active_codes = set(cloud_data.get('active_unban_codes', []))
@@ -344,7 +367,7 @@ def webhook():
                 elif text == ".status":
                     total = len(all_users)
                     banned = len(banned_users)
-                    status_msg = f"📊 **تقرير حالة النظام:**\n\n👥 إجمالي المستخدمين: {total}\n✅ النشطين: {total - banned}\n🚫 المحظورين: {banned}\n\n⚡ **حالة الخوادم:**\n🟢 خادم النظام (Vercel): مستقر\n🟢 خادم الذكاء الاصطناعي: متصل"
+                    status_msg = f"📊 **تقرير حالة النظام:**\n\n👥 إجمالي المستخدمين: {total}\n✅ النشطين: {total - banned}\n🚫 المحظورين: {banned}\n\n⚡ **حالة الخوادم:**\n🟢 خادم النظام (Vercel): مستقر\n🟢 خادم الذكاء الاصطناعي: متصل\n🟢 قاعدة البيانات (Firebase): متصل"
                     send_fb_message(sid, status_msg)
 
                 elif text.startswith(".web"):
@@ -391,7 +414,11 @@ def webhook():
                     ans, _ = ask_copilot(text)
                     send_fb_message(sid, ans)
 
+        # الحفظ النهائي للبيانات في فايربيز إذا حدث تغيير
         if db_changed:
+            cloud_data['all_users'] = list(all_users)
+            cloud_data['banned_users_dict'] = banned_users
+            cloud_data['active_unban_codes'] = list(active_codes)
             cloud_data['users_profiles'] = profiles
             save_cloud_data(cloud_data)
 
