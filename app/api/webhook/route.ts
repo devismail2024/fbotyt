@@ -2,8 +2,11 @@ import { NextResponse } from 'next/server';
 import axios from 'axios';
 import * as admin from 'firebase-admin';
 
+// 🚀 1. السطر السحري: إجبار Next.js على التعامل مع البوت كديناميكي 100% ومنع أخطاء البناء
+export const dynamic = 'force-dynamic';
+
 // ==========================================
-// ⚙️ 1. Configuration & Global States
+// ⚙️ 2. Configuration & Global States
 // ==========================================
 const PAGE_ACCESS_TOKEN = "EAAg9vun0ll4BRHDCZCuLWuZBGJ4wupUj5O4x8nZAaI51XCnXZCETTazN7JXVrZA7HJhHWxjNSkg8lvZAw2NswmibEShdeshrZByzkYcZAczM41XR4ZA2O9ib5DjUtqvOTKZBrkL2JBcDrvRVYCMMTz0wVgSxn4Dm6kQxnR88BiqCr9J2CeMV4370APs3ikoBZA3nVGMrA9kEAZDZD";
 const VERIFY_TOKEN = "ismail dev";
@@ -16,28 +19,30 @@ const STYLES: Record<string, string> = { "1": "default", "2": "ghibli", "3": "cy
 const SIZES: Record<string, string> = { "1": "1:1", "2": "3:2", "3": "2:3" };
 
 // ==========================================
-// 🔥 2. Firebase Initialization
+// 🔥 3. Firebase Initialization (Safe Mode)
 // ==========================================
-if (!admin.apps.length) {
-    try {
-        const firebaseCredsJson = process.env.FIREBASE_CREDENTIALS;
-        if (firebaseCredsJson) {
-            const credDict = JSON.parse(firebaseCredsJson);
-            admin.initializeApp({
-                credential: admin.credential.cert(credDict),
-                databaseURL: process.env.FIREBASE_DB_URL || 'https://your-project-id.firebaseio.com/'
-            });
-            console.log("Firebase initialized successfully in Next.js!");
+// 🚀 2. وضعنا التشغيل داخل دالة لكي لا ينهار Next.js أثناء البناء
+function getDb() {
+    if (!admin.apps.length) {
+        try {
+            const firebaseCredsJson = process.env.FIREBASE_CREDENTIALS;
+            if (firebaseCredsJson) {
+                const credDict = JSON.parse(firebaseCredsJson);
+                admin.initializeApp({
+                    credential: admin.credential.cert(credDict),
+                    databaseURL: process.env.FIREBASE_DB_URL || 'https://your-project-id.firebaseio.com/'
+                });
+                console.log("Firebase initialized successfully in Next.js!");
+            }
+        } catch (e) {
+            console.error("Failed to initialize Firebase:", e);
         }
-    } catch (e) {
-        console.error("Failed to initialize Firebase:", e);
     }
+    return admin.database();
 }
 
-const db = admin.database();
-
 // ==========================================
-// 🧠 3. API Engines & Detective Engine
+// 🧠 4. API Engines & Detective Engine
 // ==========================================
 async function askCopilot(userMessage: string, imageUrl?: string, webSearch = false) {
     try {
@@ -68,7 +73,6 @@ async function generateImageSync(prompt: string, style: string, size: string) {
     }
 }
 
-// 🛑 عودة المحقق الصارم (الـ Detective Engine)
 async function isMessageInappropriate(text: string): Promise<boolean> {
     const cleanText = text.toLowerCase().trim();
     const techKeywords = ["menu", "info", "gen", "web", "image", "status", "ping", "myid"];
@@ -85,13 +89,12 @@ async function isMessageInappropriate(text: string): Promise<boolean> {
             if (answer.includes("YES") && answer.length < 6) return true;
         }
     } catch (e) {
-        // في حال فشل الاتصال، نفترض أن النص سليم حتى لا نوقف البوت
     }
     return false;
 }
 
 // ==========================================
-// 💬 4. Facebook Helpers
+// 💬 5. Facebook Helpers
 // ==========================================
 async function sendFbMessage(rid: string, txt: string) {
     try {
@@ -121,7 +124,7 @@ function sendMenu(sid: string) {
 }
 
 // ==========================================
-// 🌐 5. Next.js Route Handlers
+// 🌐 6. Next.js Route Handlers
 // ==========================================
 export async function GET(req: Request) {
     const { searchParams } = new URL(req.url);
@@ -140,6 +143,7 @@ export async function POST(req: Request) {
         const data = await req.json();
 
         if (data.object === 'page') {
+            const db = getDb(); // 🚀 3. استدعاء القاعدة بأمان هنا فقط
             const ref = db.ref('maghrib_ai_bot_data');
             const snapshot = await ref.once('value');
             let cloudData = snapshot.val() || { all_users: [], banned_users_dict: {}, users_profiles: {} };
@@ -268,7 +272,6 @@ export async function POST(req: Request) {
                         await sendFbMessage(sid, "❌ أمر غير معروف. استخدم .menu.");
                     } 
                     else {
-                        // 🛑 تفعيل المحقق قبل الرد
                         const isBad = await isMessageInappropriate(text);
                         if (isBad) {
                             bannedUsers[sid] = "كلام نابي";
