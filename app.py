@@ -3,6 +3,7 @@ import time
 import random
 import requests
 import json
+import base64
 import firebase_admin
 from firebase_admin import credentials, db
 from flask import Flask, request
@@ -84,10 +85,29 @@ def is_message_inappropriate(text):
 # ==========================================
 # 🧠 4. AI & Image Engines
 # ==========================================
-def ask_copilot(user_message, image_url=None, web_search=False):
-    system = ""
+def image_to_base64(image_url):
+    """تحميل الصورة من فيسبوك وتحويلها إلى Base64"""
     try:
-        res = requests.get(TEXT_API, params={"text": f"{system} {user_message}", "imageUrl": image_url}, timeout=30)
+        response = requests.get(image_url, timeout=5)
+        if response.status_code == 200:
+            encoded_string = base64.b64encode(response.content).decode('utf-8')
+            # إضافة الترويسة القياسية للـ base64
+            return f"data:image/jpeg;base64,{encoded_string}"
+        return None
+    except Exception:
+        return None
+
+def ask_copilot(user_message, image_url=None, web_search=False):
+    params = {"text": user_message}
+    
+    # تحويل الصورة إلى Base64 قبل الإرسال
+    if image_url:
+        base64_image = image_to_base64(image_url)
+        if base64_image:
+            params["imageBase64"] = base64_image
+            
+    try:
+        res = requests.get(TEXT_API, params=params, timeout=15)
         return res.json().get("answer", "عذرا، وقع خطأ."), None
     except Exception as e: return None, str(e)
 
@@ -97,19 +117,10 @@ def generate_image_sync(prompt, style, size):
         res = requests.get(IMAGE_GEN_API, params=params, timeout=45)
         if res.status_code == 200:
             raw_url = res.json().get("data", {}).get("image_url")
+            # إزالة Catbox لضمان السرعة، وإرسال الرابط مباشرة
             if raw_url:
-                final_url, _ = upload_to_catbox(raw_url)
-                return final_url if final_url else raw_url, None
+                return raw_url, None
         return None, f"API Error: {res.status_code}"
-    except Exception as e: return None, str(e)
-
-def upload_to_catbox(image_url):
-    try:
-        img_data = requests.get(image_url).content
-        res = requests.post("https://catbox.moe/user/api.php", 
-                            data={"reqtype": "fileupload", "userhash": ""}, 
-                            files={"fileToUpload": ("image.jpg", img_data, "image/jpeg")})
-        return res.text.strip(), None
     except Exception as e: return None, str(e)
 
 # ==========================================
@@ -257,18 +268,17 @@ def webhook():
                         
                     elif step == "image_upload":
                         if attachments:
-                            # 🚀 الإصلاح الجذري هنا: قراءة القائمة بشكل صحيح
                             url = attachments['payload']['url']
                             state.update({"step": "image_prompt", "data": {"url": url}})
                             user_profile["state"] = state; db_changed = True
                             send_fb_message(sid, "✍️ أدخل طلبك للصورة (أو أرسل رقم 1 للتحليل العادي)")
                             
                     elif step == "image_prompt":
-                        send_fb_message(sid, "👁️ جاري المعالجة...")
-                        p = "تحليل الصورة" if text == "1" or not text else text
-                        cat, _ = upload_to_catbox(state["data"]["url"])
-                        ans, _ = ask_copilot(p, image_url=cat)
-                        send_fb_message(sid, ans)
+                        send_fb_message(sid, "👁️ جاري تحليل الصورة...")
+                        p = "حلل هذه الصورة بالتفصيل" if text == "1" or not text else text
+                        # تمرير رابط فيسبوك المباشر لتقوم الدالة بتحويله لـ Base64
+                        ans, _ = ask_copilot(p, image_url=state["data"]["url"])
+                        send_fb_message(sid, ans if ans else "❌ عذرا، حدث خطأ في تحليل الصورة.")
                         user_profile["state"] = {}; db_changed = True
 
                     elif step == "admin_action":
